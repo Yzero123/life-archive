@@ -103,6 +103,17 @@ try {
   check('恢复 46', stats.recoveredRecords === 46, String(stats.recoveredRecords));
   check('正文缺失 44', stats.recoveredBodyMissing === 44, String(stats.recoveredBodyMissing));
   check('年份跨度 2012-2026', stats.yearFrom === '2012' && stats.yearTo === '2026', `${stats.yearFrom}-${stats.yearTo}`);
+  check('有年份分布明细', Array.isArray(stats.yearDistribution) && stats.yearDistribution.length > 0);
+  const dist = stats.yearDistribution ?? [];
+  check('分布按年份升序', dist.every((row, i) => i === 0 || row.year > dist[i - 1].year));
+  check('分布条数合计等于总数',
+    dist.reduce((sum, row) => sum + row.count, 0) === stats.totalRecords,
+    `${dist.reduce((s, r) => s + r.count, 0)} vs ${stats.totalRecords}`);
+  check('分布回溯数合计等于回溯总数',
+    dist.reduce((sum, row) => sum + row.recovered, 0) === stats.recoveredRecords);
+  check('分布正文缺失数合计相等',
+    dist.reduce((sum, row) => sum + row.bodyMissing, 0) === stats.recoveredBodyMissing);
+  check('每行 withBody 自洽', dist.every((row) => row.withBody === row.count - row.bodyMissing));
   check('有画像', stats.hasProfile === true);
   check('有固定话术', stats.fallbackAnswer === '当时的我还不知道这是什么意思');
 

@@ -166,21 +166,42 @@ const tools = [
   {
     name: 'kb_stats',
     description:
-      '读取 QQ 空间说说知识库的总体统计：说说条数、已删除后恢复的条数、正文未能恢复的条数、覆盖年份、知识块数量、人物画像来源。回答「我的知识库有多少条」「覆盖哪些年」这类问题时先调它。',
+      '读取 QQ 空间说说知识库的总体统计：说说条数、已删除后恢复的条数、正文未能恢复的条数、覆盖年份、知识块数量、人物画像来源，以及按年份的构成明细 yearDistribution（每年条数 / 恢复数 / 正文缺失数）。回答「我的知识库有多少条」「覆盖哪些年」「哪几年数据最多」这类问题时先调它。',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
     handler: async () => {
       const kb = await loadKnowledgeBase();
       const state = await readState();
       const years = new Set();
+      const buckets = new Map();
       let recovered = 0;
       let bodyMissing = 0;
+      let withoutYear = 0;
       for (const record of kb.records) {
         const year = yearOf(record);
-        if (year) years.add(year);
+        if (!year) {
+          withoutYear += 1;
+        } else {
+          years.add(year);
+          const bucket = buckets.get(year) ?? { year, count: 0, recovered: 0, bodyMissing: 0 };
+          bucket.count += 1;
+          if (record.recovered) bucket.recovered += 1;
+          if (record.body_missing) bucket.bodyMissing += 1;
+          buckets.set(year, bucket);
+        }
         if (record.recovered) recovered += 1;
         if (record.body_missing) bodyMissing += 1;
       }
       const yearList = [...years].sort();
+      // 按年份的构成明细：可视化与盘点都直接用它，不必再逐条翻记录。
+      const yearDistribution = [...buckets.values()]
+        .sort((a, b) => a.year.localeCompare(b.year))
+        .map((bucket) => ({
+          year: bucket.year,
+          count: bucket.count,
+          recovered: bucket.recovered,
+          bodyMissing: bucket.bodyMissing,
+          withBody: bucket.count - bucket.bodyMissing,
+        }));
       return {
         knowledgeBaseExists: kb.records.length > 0,
         dataDir: DATA_DIR,
@@ -190,11 +211,13 @@ const tools = [
         totalRecords: kb.records.length,
         recoveredRecords: recovered,
         recoveredBodyMissing: bodyMissing,
+        recordsWithoutYear: withoutYear,
         chunkCount: kb.chunks.length,
         summaryCount: kb.summaries.length,
         yearFrom: yearList[0] ?? '',
         yearTo: yearList[yearList.length - 1] ?? '',
         years: yearList,
+        yearDistribution,
         profileSource: kb.profile?.source ?? '',
         hasProfile: Boolean(kb.profile),
         fallbackAnswer: FALLBACK_ANSWER,

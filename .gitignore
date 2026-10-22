@@ -1,0 +1,30 @@
+# macOS
+.DS_Store
+._*
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Node
+node_modules/
+
+# 编辑器
+.vscode/
+.idea/
+*.swp
+
+# ── 真实导出产物与本地数据 ──
+# 这些是你的 QQ 空间真实内容，出现在仓库里等于把个人信息公开。
+# 全部用前导 / 锚定到仓库根目录，免得误伤
+# qq-kb-pipeline/tests/fixtures/ 下那些**合成**的样例数据。
+/raw/
+/kb/
+/export/
+/state.json
+/messages.json
+/qzone_archive.json
+/qzoneexport_messages.json
+chrome-profile/

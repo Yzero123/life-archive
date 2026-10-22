@@ -16,7 +16,7 @@
 
 **方式一：直接导入 zip**（推荐给不想折腾 git 的人）
 
-下载 [`releases/qq-space-kb-1.4.0.zip`](releases/qq-space-kb-1.4.0.zip)，
+下载 [`releases/qq-space-kb-1.5.0.zip`](releases/qq-space-kb-1.5.0.zip)，
 在 MCode 里安装 Mini App 时选择这个包。
 
 **方式二：clone 后本地安装**
@@ -57,6 +57,7 @@ Agent 会驱动导出工具打开 QQ 空间登录页，**你用手机 QQ 扫码*
 | ③ 人物画像 | 归纳时间线、社交圈、说话方式、性格 | 一份「我是谁」底色，注入每轮对话 |
 | ④ 对话 | 先检索，检索不到直接回固定话术；命中才让模型基于资料作答 | 有依据的回答，附来源 |
 | ⑤ 直接在对话里用 | MCP 工具 + 技能 + 人设子代理，不开页面也能问知识库 | 同样的接地规则，代码兜底 |
+| ⑥ 看分布 | 年份分布看板：KPI 四卡 + 逐年构成堆叠柱图 + 紧凑明细表 | 数据密集期与回溯集中期一眼可见 |
 
 几个设计上花了力气的地方：
 
@@ -73,6 +74,9 @@ Agent 会驱动导出工具打开 QQ 空间登录页，**你用手机 QQ 扫码*
 - **MCP 服务器不调大模型**。检索、统计、接地校验全是确定性计算，措辞生成交给宿主模型。
   「知识库里没有的不许编」因此由代码兜底，而不是靠提示词自觉——提示词会漏，校验器不会。
   MCP 与页面共用同一套检索与校验逻辑（`miniapp/node/kb.mjs`），两处不会漂移。
+- **可视化是用户自有的派生技能**。协议 `mavis.widget.v1`，`mode: forked`，
+  拷贝了完整的 GenUI 基础并记录来源摘要。它不自己取数，只消费业务流已经算好的统计；
+  数据不足或接地校验判「知识库里没有」时一律走文字版。
 
 细节和踩过的坑见 [`qq-space-kb/README.md`](qq-space-kb/README.md)（包内文档）
 和 [`QQ空间说说知识库方案.md`](QQ空间说说知识库方案.md)（方案与工程复盘）。
@@ -90,17 +94,21 @@ qq-space-kb/
 │   └── node/                    # Node 侧：路由 / 领域核心 / 状态持久化 / 受控导出运行器
 ├── servers.mcp.json             # MCP 服务声明（stdio，零依赖）
 ├── mcp/kb-mcp.mjs               # MCP 服务器：统计 / 检索 / 画像 / 接地校验
-├── skills/qq-space-kb/SKILL.md  # 技能：整套操作规程
+├── skills/
+│   ├── qq-space-kb/SKILL.md     # 业务技能：整套操作规程
+│   └── qq-space-kb-visualizer/  # 派生可视化技能（用户自有，含完整 GenUI 基础拷贝）
 ├── agents/qzone-persona.md      # 人设子代理
 ├── tools/
 │   └── qzone_feed_recover.js    # 已删除说说回溯探针（实测可用）
 └── tests/
     ├── test.mjs                 # 103 项回归断言
-    └── mcp-smoke.mjs            # MCP 服务器冒烟测试
+    ├── mcp-smoke.mjs            # MCP 服务器冒烟测试
+    ├── visualizer-static.mjs    # 可视化样例静态审查
+    └── plugin-package.mjs       # 插件包结构校验
 
 qq-kb-pipeline/                   # 早期 Python 参考实现（合并/切块/摘要 + AstrBot 接入）
 QQ空间说说知识库方案.md           # 选型调研 + 关键工程点复盘
-releases/qq-space-kb-1.4.0.zip   # 可直接导入的安装包
+releases/qq-space-kb-1.5.0.zip   # 可直接导入的安装包
 ```
 
 Node 侧只用内置模块，**没有 npm 运行时依赖**；页面不加载任何远程资源。
@@ -138,8 +146,10 @@ Node 侧只用内置模块，**没有 npm 运行时依赖**；页面不加载任
 
 ```bash
 cd qq-space-kb
-node tests/test.mjs         # 103 项断言
-node tests/mcp-smoke.mjs    # MCP 服务器冒烟：真启动、真发 JSON-RPC、真调五个工具
+node tests/test.mjs              # 103 项断言
+node tests/mcp-smoke.mjs         # MCP 服务器冒烟：真启动、真发 JSON-RPC、真调五个工具
+node tests/visualizer-static.mjs # 可视化样例静态审查：信封、主题 token、安全、载荷
+node tests/plugin-package.mjs    # 插件包结构校验：清单、路径、包体积、frontmatter、凭证
 
 cd ../qq-kb-pipeline
 python3 tests/make_fixtures.py             # 生成合成 fixture（含归档库 sqlite3）

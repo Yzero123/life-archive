@@ -133,6 +133,19 @@ Agent 执行浏览器操作、跑命令行时需要你确认，页面会弹出�
 把整套流程写成了可复用的操作规程：检索 → 过闸门 → 组织回答 → **接地校验** → 输出。
 闸门不过就直接回固定话术，一个字都不多说。
 
+### 可视化技能 `qq-space-kb-visualizer`
+
+把 `kb_stats` 的年份分布画成看板：KPI 四卡 + 逐年构成堆叠柱图 + 紧凑明细表。
+点某一年可以下钻追问那年的说说。
+
+它**不自己取数**——数据全部来自业务流已经算好的 `kb_stats.yearDistribution`，
+图上每个数字都能在知识库里找到出处。数据不足、用户要纯文字、或接地校验判定
+「知识库里没有这条」时，一律走文字版，不出图。
+
+可视化是用户自有的派生技能：协议 `mavis.widget.v1`，`mode: forked`，
+拷贝了完整的 GenUI 基础（`references/genui-widget/`，5 个文件），
+来源与摘要记在 `genui.json` 里。Creator 后续更新基础不会静默改动它。
+
 ### 人设子代理 `qq-space-kb:qzone-persona`
 
 一个专属角色：以「过去的自己」的口吻说话。主 Agent 用 `task` 工具按
@@ -430,6 +443,13 @@ NODE_PATH=<导出工具目录>/node_modules node <包目录>/tools/qzone_feed_re
 > `tests/mcp-smoke.mjs` 需要一条真实记录来验证「照原话放行」，
 > 所以它**从知识库里现取**，不把原文写死在测试文件里。
 >
+> `tests/visualizer-static.mjs` 检查「样例数据里没有账号标识」，
+> 断言本身**不写死任何具体号码**——写死就等于把真实号码抄进分发包。
+> 它用「6–12 位数字串 + ownerUin + dataDir 路径」这类通用判据。
+>
+> `skills/qq-space-kb-visualizer/` 里的样例年份分布也是合成的
+> （8 个年份、26 条），**不是**任何真实账号的分布。
+>
 > `tests/fixtures/seed-demo.mjs` 里的演示数据也是合成的，
 > 界面会打上「演示数据」标记，不会和真实导出混淆。
 
@@ -438,8 +458,10 @@ NODE_PATH=<导出工具目录>/node_modules node <包目录>/tools/qzone_feed_re
 ## 开发者
 
 ```bash
-node tests/test.mjs        # 103 项断言
-node tests/mcp-smoke.mjs   # MCP 服务器冒烟：真启动、真发 JSON-RPC、真调五个工具
+node tests/test.mjs           # 103 项断言
+node tests/mcp-smoke.mjs      # MCP 服务器冒烟：真启动、真发 JSON-RPC、真调五个工具
+node tests/visualizer-static.mjs  # 可视化样例的静态审查：信封、主题 token、安全、载荷
+node tests/plugin-package.mjs # 插件包结构校验：清单、路径、包体积、frontmatter、凭证
 ```
 
 覆盖：ID 反解算法、两路合并与去重、已恢复标记、时间精度分级、知识块元数据前缀与长度上限、
@@ -472,7 +494,11 @@ miniapps/qq-space-kb/
 ├── mcp/
 │   └── kb-mcp.mjs                 MCP 服务器：统计 / 检索 / 画像 / 接地校验
 ├── skills/
-│   └── qq-space-kb/SKILL.md       技能：整套操作规程
+│   ├── qq-space-kb/SKILL.md       业务技能：整套操作规程
+│   └── qq-space-kb-visualizer/    派生可视化技能（用户自有，含完整 GenUI 基础拷贝）
+│       ├── SKILL.md
+│       ├── genui.json             协议 / 模式 / 来源摘要
+│       └── references/            组件配方 + 数据契约 + 完整样例 + GenUI 基础
 ├── agents/
 │   └── qzone-persona.md           人设子代理
 ├── miniapp/
@@ -487,6 +513,8 @@ miniapps/qq-space-kb/
 └── tests/
     ├── test.mjs                   回归测试
     ├── mcp-smoke.mjs              MCP 服务器冒烟测试
+    ├── visualizer-static.mjs      可视化样例静态审查
+    ├── plugin-package.mjs         插件包结构校验
     └── fixtures/seed-demo.mjs     演示数据种子
 ```
 

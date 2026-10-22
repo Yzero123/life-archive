@@ -20,6 +20,7 @@ import {
   buildIndex,
   buildProfile,
   buildYearSummaries,
+  FALLBACK_ANSWER,
   factualTokensGrounded,
   groundingRatio,
   isConfident,
@@ -33,7 +34,6 @@ import {
   TIME_SOURCE,
 } from './kb.mjs';
 
-const FALLBACK_ANSWER = '当时的我还不知道这是什么意思';
 const CHAT_TOP_K = 6;
 const CHAT_CONTEXT_LIMIT = 12;
 // 措辞重合度的下限。中文口语回答里虚词二元组（「那帮人」「倒是没少」）天然不重合，

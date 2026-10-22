@@ -107,6 +107,43 @@ Agent 执行浏览器操作、跑命令行时需要你确认，页面会弹出�
 
 ---
 
+## 不开页面也能用：MCP 工具 · 技能 · 人设子代理
+
+这个包同时是一个**带能力的插件**（v1.4.0 起）。不想开页面时，可以在 MCode 对话里直接用知识库。
+
+### MCP 工具（server: `qq-space-kb`）
+
+| 工具 | 作用 |
+|---|---|
+| `kb_stats` | 说说总数、已删除后恢复条数、覆盖年份、知识块数、画像来源、人设 |
+| `kb_search` | 按问题检索原文，返回命中块 + 是否置信 + 人物画像 |
+| `kb_records` | 按年份 / 恢复状态 / 关键词盘点原始记录 |
+| `kb_profile` | 人物画像（性格、时间线、各年代表原文） |
+| `kb_ground_check` | 接地校验：回答能不能发出去 |
+
+**这个服务器不调大模型。** 检索、统计、校验全是确定性计算；措辞生成交给宿主模型。
+这样「知识库里没有的不许编」由代码兜底，而不是靠提示词自觉——提示词会漏，校验器不会。
+
+知识库数据目录的定位顺序：`QQ_SPACE_KB_DATA_DIR` 环境变量 → 插件安装布局
+（`<dataDir>/plugins/qq-space-kb` → `<dataDir>/v2/plugin-data/liveboards/qq-space-kb`）→
+扫描 `<dataDir>/v*/plugin-data/liveboards/qq-space-kb` 取最新可用的一份。
+
+### 技能 `qq-space-kb`
+
+把整套流程写成了可复用的操作规程：检索 → 过闸门 → 组织回答 → **接地校验** → 输出。
+闸门不过就直接回固定话术，一个字都不多说。
+
+### 人设子代理 `qq-space-kb:qzone-persona`
+
+一个专属角色：以「过去的自己」的口吻说话。主 Agent 用 `task` 工具按
+`agent_name: "qq-space-kb:qzone-persona"` 委派给它，它只带本插件的 MCP 与技能，
+不会乱翻文件或乱联网。
+
+> 子代理需要支持插件子代理的 MiniMax Code 版本；旧版本会忽略 `agents` 字段，
+> 其余能力（MCP / 技能 / Mini App）照常可用。
+
+---
+
 ## 先试一下：演示数据
 
 没有 QQ 号、或者暂时不想扫码时，可以用合成数据先跑通整条链路：
@@ -390,6 +427,9 @@ NODE_PATH=<导出工具目录>/node_modules node <包目录>/tools/qzone_feed_re
 > 哪怕只是一个 cell_id，也能反解出你的 QQ 号。
 > 包里的测试数据全部是合成的（`moodId()` 按同样的编码规则现场生成）。
 >
+> `tests/mcp-smoke.mjs` 需要一条真实记录来验证「照原话放行」，
+> 所以它**从知识库里现取**，不把原文写死在测试文件里。
+>
 > `tests/fixtures/seed-demo.mjs` 里的演示数据也是合成的，
 > 界面会打上「演示数据」标记，不会和真实导出混淆。
 
@@ -399,6 +439,7 @@ NODE_PATH=<导出工具目录>/node_modules node <包目录>/tools/qzone_feed_re
 
 ```bash
 node tests/test.mjs        # 103 项断言
+node tests/mcp-smoke.mjs   # MCP 服务器冒烟：真启动、真发 JSON-RPC、真调五个工具
 ```
 
 覆盖：ID 反解算法、两路合并与去重、已恢复标记、时间精度分级、知识块元数据前缀与长度上限、
@@ -425,8 +466,15 @@ miniapps/qq-space-kb/
 ├── .minimax-plugin/plugin.json    插件清单
 ├── package.json                   mcode.miniApp 声明入口
 ├── icon.png
+├── servers.mcp.json               MCP 服务声明（stdio，零依赖）
 ├── tools/
 │   └── qzone_feed_recover.js      回溯探针（实测可用，依赖 playwright + 系统 Chrome）
+├── mcp/
+│   └── kb-mcp.mjs                 MCP 服务器：统计 / 检索 / 画像 / 接地校验
+├── skills/
+│   └── qq-space-kb/SKILL.md       技能：整套操作规程
+├── agents/
+│   └── qzone-persona.md           人设子代理
 ├── miniapp/
 │   ├── miniapp.json               Mini App 声明
 │   ├── client/index.html          页面
@@ -438,10 +486,12 @@ miniapps/qq-space-kb/
 │       └── miniapp-api.ts         类型声明
 └── tests/
     ├── test.mjs                   回归测试
+    ├── mcp-smoke.mjs              MCP 服务器冒烟测试
     └── fixtures/seed-demo.mjs     演示数据种子
 ```
 
 Node 侧只用内置模块，无 npm 运行时依赖；页面无远程资源。
+MCP 服务器复用 `miniapp/node/kb.mjs` 里同一套检索与校验逻辑——两处不会漂移。
 
 ### 一条贯穿全局的约束
 

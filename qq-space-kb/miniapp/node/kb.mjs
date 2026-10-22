@@ -8,6 +8,14 @@
 //   - 接地校验：答案必须落在检索到的上下文里
 
 export const QZONE_LAUNCH_TS = 1104537600; // 2005-01-01 UTC
+
+/**
+ * 知识库里查不到时的固定话术。
+ *
+ * Mini App 与 MCP 服务器共用这一份，避免两处各写一个字符串以后漂移。
+ * 「不知道」也是一句回答，不该是报错或沉默。
+ */
+export const FALLBACK_ANSWER = '当时的我还不知道这是什么意思';
 export const HISTORY_FEED_PREFIX = 'history-v2-event:';
 export const HISTORY_CELL_PREFIX = 'history-v2:';
 export const HISTORY_GUESTBOOK_PREFIX = 'history-guestbook:';

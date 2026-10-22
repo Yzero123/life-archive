@@ -1,0 +1,21 @@
+# 管线产物
+# out/ 下的示例产物是**合成**的，作为管线输出样例保留在仓库里。
+*.jsonl
+!tests/fixtures/*.jsonl
+!out/kb/*.jsonl
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# 参考源码（可选克隆，用于分块器校验）
+astrbot-src/
+qzrestore/
+
+# 私密数据：绝不要提交
+# fixtures/qzone-archive.sqlite3 由 tests/make_fixtures.py 生成，仓库里不留
+*.sqlite3
+*.db
+.env

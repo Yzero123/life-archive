@@ -1,0 +1,74 @@
+[
+  {
+    "tid": "b327e672e295585baaaabbbb",
+    "content": "<p>今天把 QQ 空间历史说说整理成离线网页了，翻旧内容终于不再费劲。</p>",
+    "custom_content": "今天把 QQ 空间历史说说整理成离线网页了，翻旧内容终于不再费劲。",
+    "created_time": 1532532194,
+    "custom_create_time": "2018-07-25 23:23:14",
+    "commentlist": [
+      {
+        "content": "牛啊",
+        "nick": "小明",
+        "createTime": "2018年07月26日"
+      },
+      {
+        "content": "这事儿你干了多久了",
+        "nick": "小红",
+        "createTime": 1532535794
+      }
+    ],
+    "likeTotal": 18,
+    "likes": [
+      {
+        "fuin": 10001,
+        "nick": "小刚"
+      },
+      {
+        "fuin": 10002,
+        "nick": "小丽"
+      }
+    ],
+    "lbs": {
+      "address": "上海市静安区",
+      "name": "静安寺",
+      "pos_x": 121.44,
+      "pos_y": 31.22
+    },
+    "pic": [
+      {
+        "hd_url": "https://photo.example.com/a1.jpg"
+      }
+    ],
+    "video": [],
+    "post_url": "https://user.qzone.qq.com/1927686067/mood/b327e672e295585baaaabbbb",
+    "rt_uinname": ""
+  },
+  {
+    "tid": "b327e67280c18556eeeeffff",
+    "content": "换了新工作，搬到南京西路了。",
+    "custom_content": "换了新工作，搬到南京西路了。",
+    "created_time": 1451606400,
+    "custom_create_time": "2016-01-01 00:00:00",
+    "commentlist": [],
+    "likeTotal": 3,
+    "likes": [],
+    "lbs": {
+      "address": "上海市静安区",
+      "name": "南京西路"
+    },
+    "pic": [],
+    "video": [],
+    "post_url": "https://user.qzone.qq.com/1927686067/mood/b327e67280c18556eeeeffff"
+  },
+  {
+    "tid": "no-time-record",
+    "content": "这条没有绝对时间戳，知识库应当跳过它。",
+    "custom_content": "这条没有绝对时间戳，知识库应当跳过它。",
+    "created_time": 0,
+    "commentlist": [],
+    "likeTotal": 0,
+    "likes": [],
+    "pic": [],
+    "video": []
+  }
+]

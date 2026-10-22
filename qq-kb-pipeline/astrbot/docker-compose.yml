@@ -1,0 +1,31 @@
+# AstrBot 部署：聊天 bot + QQ 空间知识库
+#
+# 启动：docker compose up -d
+# 访问：http://localhost:6185
+#
+# 首次进入：设置管理员密码 → 服务提供商 → 配 Embedding（bge-m3）
+#          → 知识库 → 建两个库 → 上传 out/kb/L1 与 out/kb/L2
+#          → 人设 → 粘贴 astrbot/persona_prompt.md 并替换占位符
+#          → 装 astrbot_plugin_qzone 插件
+#
+# 大陆网络拉不动镜像时，把 image 换成：
+#   image: m.daocloud.io/docker.io/soulter/astrbot:latest
+#
+# 需要接 OneBot v11 (NapCat) 的话，用官方的一键编排：
+#   https://github.com/NapNeko/NapCat-Docker/blob/main/compose/astrbot.yml
+
+services:
+  astrbot:
+    image: soulter/astrbot:latest
+    container_name: astrbot
+    restart: always
+    security_opt:
+      - no-new-privileges:true
+    ports:
+      - "6185:6185" # AstrBot WebUI
+      - "6199:6199" # 可选，OneBot v11 NapCat WebSocket 端口
+    environment:
+      - TZ=Asia/Shanghai
+    volumes:
+      - ./data:/AstrBot/data
+      - /etc/localtime:/etc/localtime:ro

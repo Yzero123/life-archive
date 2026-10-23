@@ -941,14 +941,41 @@ async function reset(runtime) {
 // 微信朋友圈（2.0）
 // ---------------------------------------------------------------------------
 /**
+ * 内容嗅探的大小上限。朋友圈正文体量小，超大文件多半不是我们要的。
+ */
+const WX_SNIFF_MAX_BYTES = 32 * 1024 * 1024;
+
+/**
+ * 判断一个文件是不是「朋友圈导出」。
+ *
+ * 只看顶层形状，不看文件名——外部工具的产物可能叫「张三.json」，
+ * 也可能叫「sns_<wxid>.json」，靠文件名猜不全。顶层有 posts 数组
+ * 是唯一可靠的特征：导出工具的 index.json / export_report.json 都没有它。
+ */
+async function looksLikeWechatSnsFile(path) {
+  try {
+    const info = await stat(path);
+    if (!info.isFile() || info.size > WX_SNIFF_MAX_BYTES) return false;
+    const payload = JSON.parse(await readFile(path, 'utf8'));
+    return Boolean(payload && typeof payload === 'object' && Array.isArray(payload.posts));
+  } catch {
+    return false;
+  }
+}
+
+/**
  * 朋友圈 JSON 的候选位置。
  *
  * 外部解密工具（SIWX / WeChatDataAnalysis 等）把导出结果放在它自己的目录里，
  * 用户不一定记得放哪。与其让人猜路径，不如扫几个常见位置。扫描是有界的：
- * 最多下探两层目录、只认三种文件名前缀，不做全盘搜索。
+ * 最多下探三层目录，不做全盘搜索。
+ *
+ * 文件名规则只是快捷通道：认得出来的直接收；认不出来的退回看内容，
+ * 因为外部工具的产物文件名不固定（WeChatDataAnalysis 按联系人昵称命名）。
  */
-async function scanWxCandidates(runtime) {
+export async function scanWxCandidates(runtime, options = {}) {
   const found = [];
+  const zips = [];
   const seen = new Set();
   const push = (path) => {
     if (!path || seen.has(path)) return;
@@ -957,22 +984,24 @@ async function scanWxCandidates(runtime) {
   };
   push(runtime.store.wxSnsPath);
   const home = homedir();
-  const roots = [
-    { dir: join(home, 'Documents'), depth: 2 },
-    { dir: join(home, 'Downloads'), depth: 2 },
-    { dir: join(home, 'Desktop'), depth: 2 },
+  const defaults = [
+    { dir: join(home, 'Documents'), depth: 2, sniffBudget: 25 },
+    { dir: join(home, 'Downloads'), depth: 2, sniffBudget: 25 },
+    { dir: join(home, 'Desktop'), depth: 2, sniffBudget: 25 },
     // WeChatDataAnalysis 的朋友圈导出默认落在微信容器内：
-    //   <容器>/Documents/exports/<账号>/sns_<wxid>.json
+    //   <容器>/Documents/exports/<账号>/<联系人昵称>.json
     // 这个位置在「文档/下载/桌面」之外，不加进来就找不到。
     {
       dir: join(home, 'Library/Containers/com.tencent.xinWeChat/Data/Documents/exports'),
       depth: 3,
+      sniffBudget: 200,
     },
   ];
-  // 三种前缀：我们的约定名、含「朋友圈」字样的中文名、第三方工具的 sns_*.json
+  const roots = Array.isArray(options.roots) ? options.roots : defaults;
+  // 快捷文件名：我们的约定名、含「朋友圈」字样的中文名、第三方工具的 sns_*.json
   const pattern = /^(wechat_sns.*\.json|.*朋友圈.*\.json|sns_.*\.json)$/;
 
-  const walk = async (dir, depth) => {
+  const walk = async (dir, depth, budget) => {
     let entries = [];
     try {
       entries = await readdir(dir, { withFileTypes: true });
@@ -982,18 +1011,32 @@ async function scanWxCandidates(runtime) {
     for (const entry of entries) {
       const full = join(dir, entry.name);
       if (entry.isFile()) {
-        if (pattern.test(entry.name)) push(full);
+        if (pattern.test(entry.name)) {
+          push(full);
+          continue;
+        }
+        // 认不出来的文件名 → 退回看内容。每个目录的嗅探次数有上限，
+        // 免得在一个装满 json 的目录里做无界的工作。
+        if (budget.remaining > 0 && entry.name.toLowerCase().endsWith('.json')) {
+          budget.remaining -= 1;
+          if (await looksLikeWechatSnsFile(full)) push(full);
+          continue;
+        }
+        if (budget.remaining > 0 && entry.name.toLowerCase().endsWith('.zip')) {
+          zips.push(full);
+        }
         continue;
       }
       if (!entry.isDirectory()) continue;
-      if (depth > 1) await walk(full, depth - 1);
+      if (depth > 1) await walk(full, depth - 1, budget);
     }
   };
 
   for (const root of roots) {
     if (!existsSync(root.dir)) continue;
-    await walk(root.dir, root.depth);
+    await walk(root.dir, root.depth ?? 2, { remaining: root.sniffBudget ?? 25 });
   }
+  found.zips = zips;
   return found;
 }
 
@@ -1026,11 +1069,14 @@ async function wxStatus(runtime) {
  * 三种来源都能进：显式路径、常见位置自动扫描、请求体直接带 payload。
  * 导入只做「落盘 + 记账」，真正的解析与合并发生在「构建知识库」那一步——
  * 长耗时的活不挂在 HTTP 请求里。
+ *
+ * `options` 只给测试用（指定扫描根），线上调用不传。
  */
-async function importWx(runtime, body) {
+export async function importWx(runtime, body, options = {}) {
   const { store } = runtime;
   let payload = null;
   let sourcePath = '';
+  let zipHint = 0;
 
   const inline = body?.payload;
   if (inline && typeof inline === 'object') {
@@ -1038,22 +1084,43 @@ async function importWx(runtime, body) {
     sourcePath = 'inline';
   } else {
     const explicit = String(body?.path ?? '').trim();
-    const candidates = explicit ? [explicit] : await scanWxCandidates(runtime);
+    const candidates = explicit ? [explicit] : await scanWxCandidates(runtime, options);
+    const forcedOwner = String(body?.owner ?? '').trim();
+    let firstParsed = null;
     for (const candidate of candidates) {
+      let parsed = null;
       try {
-        payload = JSON.parse(await readFile(candidate, 'utf8'));
-        sourcePath = candidate;
-        break;
+        parsed = JSON.parse(await readFile(candidate, 'utf8'));
       } catch {
         // 读不到或不是合法 JSON，换下一个候选
+        continue;
+      }
+      if (!firstParsed) firstParsed = { payload: parsed, path: candidate };
+      // 外部工具按联系人分文件导出时，目录里会有好几份。
+      // 只有「本人发的那份」才留得下记录——不能拿第一份能解析的就用，
+      // 否则会导入到某个好友的朋友圈，然后报「没有一条是本人发的」。
+      const probe = parseWechatSns(parsed, { ownerWxid: forcedOwner });
+      if (probe.stats.kept > 0) {
+        payload = parsed;
+        sourcePath = candidate;
+        break;
       }
     }
+    if (!payload && firstParsed) {
+      // 每一份都没有本人发的记录：留第一份，后面照常如实报错。
+      payload = firstParsed.payload;
+      sourcePath = firstParsed.path;
+    }
+    zipHint = Array.isArray(candidates.zips) ? candidates.zips.length : 0;
   }
 
   if (!payload || typeof payload !== 'object') {
+    const zipNote = zipHint
+      ? `另外发现 ${zipHint} 个 zip 压缩包——请先解压，取出里面的 JSON 再导入。`
+      : '';
     return {
       ok: false,
-      message: '没找到可导入的朋友圈数据。把导出的 JSON 放进下面的目录，或直接填文件路径。',
+      message: '没找到可导入的朋友圈数据。把导出的 JSON 放进下面的目录，或直接填文件路径。' + zipNote,
       targetDir: store.rawDir,
     };
   }

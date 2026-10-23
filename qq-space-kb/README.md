@@ -56,10 +56,11 @@ cp -R qq-space-kb ~/.minimax/plugins/qq-space-kb
 
 ## 版本与回退
 
-当前版本 **v2.0.2**。完整历史见 [`CHANGELOG.md`](CHANGELOG.md)。
+当前版本 **v2.0.3**。完整历史见 [`CHANGELOG.md`](CHANGELOG.md)。
 
 | 版本 | 一句话 |
 |---|---|
+| v2.0.3 | 导入按钮按内容认文件，导出全部联系人时也能挑出你发的那份 |
 | v2.0.2 | 归一化器支持 WeChatDataAnalysis 的导出形状，导入按钮扫到它的导出目录 |
 | v2.0.1 | 文档事实修正：SIP 只挡 SIWX，不挡 WeChatDataAnalysis |
 | v2.0.0 | 微信朋友圈历史记录接入：两个来源合成一份画像，朋友圈数据源默认关 |

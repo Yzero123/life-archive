@@ -8,7 +8,7 @@
 这是一个 [Mini App](https://agent.minimax.cn/docs/miniapp/overview) 包，
 可以在 MiniMax Code（MCode）里直接安装使用。
 
-> 当前版本 **v2.0.2**。
+> 当前版本 **v2.0.3**。
 > 完整版本历史见 [`CHANGELOG.md`](CHANGELOG.md)；
 > 想回退到任意旧版，见 [版本历史与回退](#版本历史与回退)。
 
@@ -136,6 +136,7 @@ git clone https://github.com/Yzero123/qq-space-kb.git
 
 | 版本 | 日期 | 一句话 | 安装包 |
 |---|---|---|---|
+| v2.0.3 | 2026-10-23 | 导入按钮按内容认文件，导出全部联系人时也能挑出你发的那份 | [zip](releases/qq-space-kb-2.0.3.zip) |
 | v2.0.2 | 2026-10-23 | 归一化器支持 WeChatDataAnalysis 的导出形状 | [zip](releases/qq-space-kb-2.0.2.zip) |
 | v2.0.1 | 2026-10-23 | 文档事实修正：SIP 只挡 SIWX，不挡 WeChatDataAnalysis | [zip](releases/qq-space-kb-2.0.1.zip) |
 | v2.0.0 | 2026-10-23 | 微信朋友圈历史接入：双源画像，朋友圈数据源默认关 | [zip](releases/qq-space-kb-2.0.0.zip) |

@@ -650,7 +650,7 @@ const mockAgent = {
   async reply() {},
 };
 
-const { start } = await import('../miniapp/node/server.mjs');
+const { start, scanWxCandidates, importWx } = await import('../miniapp/node/server.mjs');
 const probe = createNetServer();
 const port = await new Promise((resolve, reject) => {
   probe.once('error', reject);
@@ -779,6 +779,91 @@ try {
   await rm(dataDir, { recursive: true, force: true });
   await rm(runnerDir, { recursive: true, force: true });
 }
+
+// ---------------------------------------------------------------------------
+// [6] 扫描与多候选导入（照着 WeChatDataAnalysis 的真实产物形态）
+// ---------------------------------------------------------------------------
+// 它按联系人分文件导出，文件名是「昵称.json」，zip 模式还会再打个包。
+// 插件原来的扫描只认三种固定文件名，第一次用的人导出完会扫不到。
+// 这块照着 sns_export_service.py 的真实输出造数据。
+const scanRoot = await mkdtemp(join(tmpdir(), 'wx-scan-'));
+const scanAcct = join(scanRoot, `${WX_OWNER}_4160`);
+await mkdir(scanAcct, { recursive: true });
+
+// 好友那份：顶层 account 是**导出者**，username 和 post 作者才是好友。
+// 所以它解析得通、但一条本人记录都留不下。
+const friendPayload = {
+  ...WDA_PAYLOAD,
+  account: `${WX_OWNER}_4160`,
+  username: WX_FRIEND,
+  displayName: '演示好友',
+  postCount: 1,
+  posts: [{
+    ...WDA_PAYLOAD.posts[0],
+    username: WX_FRIEND,
+    displayName: '演示好友',
+  }],
+};
+const minePayload = { ...WDA_PAYLOAD, account: `${WX_OWNER}_4160`, username: WX_OWNER };
+
+await writeFile(join(scanAcct, '演示好友.json'), JSON.stringify(friendPayload), 'utf8');
+await writeFile(join(scanAcct, '演示本人.json'), JSON.stringify(minePayload), 'utf8');
+// 导出工具自己的索引与报告：顶层没有 posts，不该被当成朋友圈数据收进来
+await writeFile(join(scanAcct, 'index.json'), JSON.stringify({
+  exportedAt: WDA_PAYLOAD.exportedAt,
+  exportId: WDA_PAYLOAD.exportId,
+  account: `${WX_OWNER}_4160`,
+  scope: 'all',
+  format: 'json',
+  users: [],
+}), 'utf8');
+await writeFile(join(scanAcct, 'export_report.json'), JSON.stringify({
+  exportedAt: WDA_PAYLOAD.exportedAt,
+  scope: 'all',
+  total: 1,
+}), 'utf8');
+// 无关的 json
+await writeFile(join(scanAcct, 'notes.json'), JSON.stringify({ hello: 'world' }), 'utf8');
+// 约定名仍然直接命中
+await writeFile(join(scanAcct, 'sns_wxid_demo0001.json'), JSON.stringify(minePayload), 'utf8');
+
+const scanRoots = [{ dir: scanAcct, depth: 1, sniffBudget: 50 }];
+const scanned = await scanWxCandidates({ store: { wxSnsPath: join(scanRoot, 'raw', 'wechat_sns.json') } }, { roots: scanRoots });
+const scannedNames = scanned.map((p) => p.split('/').pop());
+
+check('扫描能按内容形状认出「昵称.json」（WeChatDataAnalysis 的真实命名）', () => {
+  assert.ok(scannedNames.includes('演示好友.json'));
+  assert.ok(scannedNames.includes('演示本人.json'));
+});
+check('扫描不收导出工具的 index.json / export_report.json', () => {
+  assert.ok(!scannedNames.includes('index.json'));
+  assert.ok(!scannedNames.includes('export_report.json'));
+});
+check('扫描不收无关的 json', () => {
+  assert.ok(!scannedNames.includes('notes.json'));
+});
+check('扫描仍然认得约定文件名 sns_*.json', () => {
+  assert.ok(scannedNames.includes('sns_wxid_demo0001.json'));
+});
+
+const importDir = await mkdtemp(join(tmpdir(), 'wx-import-'));
+const { Store } = await import('../miniapp/node/store.mjs');
+const importStore = new Store(importDir);
+await importStore.init();
+const importRes = await importWx({ store: importStore }, {}, { roots: scanRoots });
+check('多候选时导入的是「本人发的那份」，不是目录里第一份', () => {
+  assert.equal(importRes.ok, true);
+  assert.equal(importRes.count, 3);
+  assert.equal(importRes.owner, WX_OWNER);
+});
+await checkAsync('落盘的 raw 来自本人那份', async () => {
+  const raw = JSON.parse(await readFile(join(importDir, 'raw', 'wechat_sns.json'), 'utf8'));
+  assert.equal(raw.username, WX_OWNER);
+  assert.equal(raw.posts.length, 3);
+});
+
+await rm(scanRoot, { recursive: true, force: true });
+await rm(importDir, { recursive: true, force: true });
 
 console.log('\n' + '='.repeat(56));
 console.log(`通过 ${passed} 项，失败 ${failed} 项`);

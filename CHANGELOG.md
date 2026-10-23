@@ -28,36 +28,65 @@ git revert <commit-sha>      # 逐个撤销
 
 ---
 
-## 未发布 — 取数指引按本机实测修正（代码一行未改）
+## v2.0.3 — 2026-10-23
 
-2026-10-23 在本机（macOS 26.5.2 · Apple Silicon · 微信 4.1.15）实跑了一次
-WeChatDataAnalysis 2.10.0，抓密钥没成功。查官方源码定位到两个根因，指引因此改写。
+**导入按钮按内容认文件；导出全部联系人时，也能挑出你发的那份。**
 
-### 修正的事实
+上一版说「导入按钮会扫到它的导出目录」——那句话不成立。
+WeChatDataAnalysis 实际是**按联系人分文件**导出，文件名叫「昵称.json」，
+原来那三条文件名规则一个都匹配不上。这版改成**按内容**认。
 
-| 事项 | 之前写的 | 实测 / 源码结论 |
+同一天做的另一件事：把取数指引按本机实测重写（见下「取数指引的实测修正」）。
+
+### 修的三个问题
+
+| 问题 | 现象 | 现在 |
 |---|---|---|
-| 受控组件路径 | 可用，切「开发者工具」就够 | **本机走不通**。官方源码 `macos_db_key_helper._process_access_denied_error()` 判据：微信 `hardened runtime=True` 且 `get_task_allow=False` 即必然报 `TARGET_PROCESS_PROTECTED`。官方对该错误的说明原文是「**这不是"开发者工具"开关未开启，无需反复切换该设置**」 |
-| 兜底路径卡点 | 含糊写成「需要开发者工具授权」 | 卡在 **prepare 阶段的权限硬检查**：`os.access(/Applications/WeChat.app, W_OK)` 为 False（默认 `root:wheel` 755）→ `in_place_restore_permissions_unsafe`。`/Applications` 本身是 `root:admin` 可写，**只有微信顶层目录这一条**要放开组写权限 |
-| 密钥落点 | `~/.wcdb-key-tool/` | 数据库密钥在 `~/.wcdb-key-tool/wechat-passphrase.json`（64 位 hex）；`…/wechat-data-analysis-desktop/output/account_keys.json` 只是**图片密钥**，不能代替 |
+| 扫不到真实产物 | 导出后点「导入」报「没找到可导入的朋友圈数据」 | 按顶层有没有 `posts` 数组判定，**文件名不限** |
+| 多份文件只取第一份 | 导出全部联系人时，目录里第一份可能是好友的 → 报「没有一条是本人发的」 | 逐份试，**挑出留得下本人记录的那份** |
+| zip 产物看不懂 | 选了「全量压缩包」→ 插件读不了 | 明确提示「请先解压，取出里面的 JSON 再导入」 |
 
-### 顺带确认的好消息
+### 依据
 
-- 工具的**自动发现**已实测通过：`Documents/xwechat_files/<账号>/db_storage` 下 18 个库全部识别，目录布局与官方文档写的路径不同也不影响。
+不是照着文档猜的，是照着 WeChatDataAnalysis 2.10.0 的 `sns_export_service.py` 实际输出写的：
+按联系人分文件、文件名是昵称、顶层 `account` 是**导出者**而 `username` 与 post 作者是**联系人**。
+导出工具自己的 `index.json`、`export_report.json` 顶层没有 `posts`，不会被误收。
 
 ### 新增
 
 | 项 | 说明 |
 |---|---|
-| `tools/wx-path-check.py` | 只读预判脚本。点「获取」之前跑一次，直接告诉你要不要改权限、会不会撞 `TARGET_PROCESS_PROTECTED`、调试授权够不够 |
+| 内容嗅探 | 顶层有 `posts` 数组即认定是朋友圈导出；单文件上限 32 MB |
+| 扫描预算 | 每个根目录最多嗅探 25 个文件（微信容器根 200 个），不做无界搜索 |
+| 测试 | `tests/test-wx.mjs` 新增 6 项（真实产物形态 + 多候选导入），共 **68 项** |
 
-### 改动文件
+### 取数指引的实测修正
 
-- `微信朋友圈取数操作指引.md`（§2.3 / §3 整段 / §6 / §9）
-- `tools/wx-path-check.py`（新增）
+本机（macOS 26.5.2 · Apple Silicon · 微信 4.1.15）实跑 WeChatDataAnalysis 2.10.0 抓密钥失败，
+查官方源码定位到两个根因，指引因此改写。
 
-> 验证：1.0 回归 121 项、2.0 朋友圈 62 项、隐私回扫 18 项全过。**插件代码一行未改**，
-> 已安装的 v2.0.2 不受影响，无需重新安装。
+| 事项 | 之前写的 | 实测 / 源码结论 |
+|---|---|---|
+| 受控组件路径 | 可用，切「开发者工具」就够 | **本机走不通**。官方源码 `macos_db_key_helper._process_access_denied_error()` 判据：微信 `hardened runtime=True` 且 `get_task_allow=False` 即必然报 `TARGET_PROCESS_PROTECTED`。官方对该错误的说明原文是「**这不是"开发者工具"开关未开启，无需反复切换该设置**」 |
+| 兜底路径卡点 | 含糊写成「需要开发者工具授权」 | 卡在 **prepare 阶段的权限硬检查**：`os.access(/Applications/WeChat.app, W_OK)` 为 False（默认 `root:wheel` 755）→ `in_place_restore_permissions_unsafe`。`/Applications` 本身是 `root:admin` 可写，**只有微信顶层目录这一条**要放开组写权限 |
+| 密钥落点 | `~/.wcdb-key-tool/` | 数据库密钥在 `~/.wcdb-key-tool/wechat-passphrase.json`（64 位 hex）；`account_keys.json` 只是**图片密钥**，不能代替 |
+| 导出产物 | 一个 `sns_<wxid>.json` | 按联系人分文件的 `<昵称>.json`（增量目录模式），或一个 `.zip`（压缩包模式） |
+
+顺带确认：工具的**自动发现**已实测通过——`Documents/xwechat_files/<账号>/db_storage` 下 18 个库全部识别，
+目录布局与官方文档写的路径不同也不影响。
+
+新增 `tools/wx-path-check.py`：只读预判脚本。点「获取」之前跑一次，直接告诉你要不要改权限、
+会不会撞 `TARGET_PROCESS_PROTECTED`、调试授权够不够。
+
+### 不受影响
+
+1.0 的行为一个字没变——121 项逐字节回归锁仍然全过。朋友圈数据源依然默认关。
+
+### 回退
+
+```bash
+git checkout v2.0.2
+```
 
 ---
 

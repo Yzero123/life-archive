@@ -3,10 +3,14 @@
 把 QQ 空间的全部历史说说（含已删除后恢复的内容）变成一个**能对话的知识库**。
 
 导出 → 建库 → 归纳人物画像 → 按人设对话。**回答必须有知识库依据**，
-查不到就回答「当时我还不知道这是什么意思」，不编造。
+资料不足以回答就回答「当时我还不知道这是什么意思」，不编造。
 
 这是一个 [Mini App](https://agent.minimax.cn/docs/miniapp/overview) 包，
 可以在 MiniMax Code（MCode）里直接安装使用。
+
+> 当前版本 **v1.7.1**。
+> 完整版本历史见 [`CHANGELOG.md`](CHANGELOG.md)；
+> 想回退到任意旧版，见 [版本历史与回退](#版本历史与回退)。
 
 ---
 
@@ -16,8 +20,10 @@
 
 **方式一：直接导入 zip**（推荐给不想折腾 git 的人）
 
-下载 [`releases/qq-space-kb-1.7.0.zip`](releases/qq-space-kb-1.7.0.zip)，
+下载 [`releases/qq-space-kb-1.7.1.zip`](releases/qq-space-kb-1.7.1.zip)，
 在 MCode 里安装 Mini App 时选择这个包。
+
+> 想要旧版？[Releases 页面](https://github.com/Yzero123/qq-space-kb/releases)有全部历史版本的 zip。
 
 **方式二：clone 后本地安装**
 
@@ -115,6 +121,46 @@ git clone https://github.com/Yzero123/qq-space-kb.git
 
 ---
 
+## 版本历史与回退
+
+完整历史见 [`CHANGELOG.md`](CHANGELOG.md)（随包分发，插件目录里也有）。
+
+| 版本 | 日期 | 一句话 | 安装包 |
+|---|---|---|---|
+| v1.7.1 | 2026-10-23 | 版本管理：CHANGELOG + 隐私回扫脚本 + 修文档示例泄漏 | [zip](releases/qq-space-kb-1.7.1.zip) |
+| v1.7.0 | 2026-10-23 | 对话架构：知识库整体当 prompt | [zip](releases/qq-space-kb-1.7.0.zip) |
+| v1.6.2 | 2026-10-23 | 留言板留言不再被当成「我发过的说说」 | [zip](releases/qq-space-kb-1.6.2.zip) |
+| v1.6.1 | 2026-10-23 | 按钮挪进面板，状态栏按真实状态显示 | [zip](releases/qq-space-kb-1.6.1.zip) |
+| v1.6.0 | 2026-10-23 | 全程只扫一次码 | [zip](releases/qq-space-kb-1.6.0.zip) |
+| v1.5.0 | 2026-10-22 | 年份分布可视化技能 | [zip](releases/qq-space-kb-1.5.0.zip) |
+| v1.4.0 | 2026-10-22 | 插件化：MCP 工具 + 技能 + 人设子代理 | [zip](releases/qq-space-kb-1.4.0.zip) |
+| v1.3.0 | 2026-10-22 | 第一个版本 | [zip](releases/qq-space-kb-1.3.0.zip) |
+
+每个版本都有 **Git tag**（`v1.x.y`）和 **GitHub Release**
+（<https://github.com/Yzero123/qq-space-kb/releases>，zip 作为资产挂着）。
+
+**三种回退方式，按场景选：**
+
+```bash
+# 1. 只想要某个旧版的安装包
+#    → Releases 页面下载对应 zip，在 MCode 里重新安装即可
+#    https://github.com/Yzero123/qq-space-kb/releases
+
+# 2. 想把源码切回某个版本（改代码、做对比）
+git clone https://github.com/Yzero123/qq-space-kb.git
+cd qq-space-kb
+git checkout v1.6.2          # 切到旧版
+git checkout main            # 切回来
+
+# 3. 想撤销某个版本（不动历史，安全）
+git revert <commit-sha>      # 逐个撤销
+```
+
+> 历史版本的发布 zip 发布前做了**脱敏修补**（把从真实数据抄来的两处值换成合成值）。
+> tag 指向的是**原始提交**，`git checkout v1.6.2` 能复现未修补的原始内容。
+
+---
+
 ## 目录结构
 
 ```
@@ -138,11 +184,13 @@ qq-space-kb/
     ├── export-session.mjs       # 「一次扫码」回归：会话管理器 / 编排器 / 接线 / 页面
     ├── mcp-smoke.mjs            # MCP 服务器冒烟测试
     ├── visualizer-static.mjs    # 可视化样例静态审查
-    └── plugin-package.mjs       # 插件包结构校验
+    ├── plugin-package.mjs       # 插件包结构校验
+    └── privacy-scan.mjs         # 隐私回扫：真实数据现算指纹，回扫包内文件与发布 zip
 
+CHANGELOG.md                      # 版本历史：改了什么、为什么、怎么回退
 qq-kb-pipeline/                   # 早期 Python 参考实现（合并/切块/摘要 + AstrBot 接入）
 QQ空间说说知识库方案.md           # 选型调研 + 关键工程点复盘
-releases/qq-space-kb-1.7.0.zip   # 可直接导入的安装包
+releases/qq-space-kb-*.zip        # 各历史版本的安装包（1.3.0 ~ 1.7.1，全部可直接导入）
 ```
 
 Node 侧只用内置模块，**没有 npm 运行时依赖**；页面不加载任何远程资源。
@@ -156,18 +204,34 @@ Node 侧只用内置模块，**没有 npm 运行时依赖**；页面不加载任
 真实数据全部落在宿主注入的 `dataDir`（`raw/`、`kb/`、`state.json`），**不在仓库里**。
 仓库内只有代码、文档、**合成**的演示数据和自绘图标。
 
-自检结果（用真实数据展开成逐片段指纹后回扫仓库）：
+自检已经**脚本化**，不再靠手写关键词扫：
 
-| 检查项 | 结果 |
+```bash
+cd qq-space-kb
+node tests/privacy-scan.mjs
+```
+
+它从本机真实知识库**现算**指纹（QQ 号的十进制与各种 hex 编码、完整 cell_id、
+**8 位 owner 前缀**、16 位前缀、说说链接、昵称、正文 4 字滑窗），
+再回扫包内每一个文件和 `releases/` 下的每一个 zip。脚本里**不写死任何个人信息**。
+
+| 检查维度 | 性质 |
 |---|---|
-| 真实 QQ 号（112 个，各种写法） | 0 残留 |
-| 真实说说 ID（90 个，可反解出 QQ 号） | 0 残留 |
-| 真实长数字（时间戳 / 赞数等） | 0 残留 |
-| 真实互动昵称（36 个） | 0 残留 |
-| 真实正文 / 评论 / 地名的 4 字滑窗（766 个） | 0 残留 |
-| 混合字符 8 字窗口（245 个） | 0 残留 |
-| 本机绝对路径、用户名、宿主数据目录路径 | 0 残留 |
+| QQ 号（十进制 / 大小端 hex） | 硬拦 |
+| 完整 cell_id | 硬拦 |
+| **8 位 owner 前缀**（说说 ID 前 8 位 hex = 空间主人 QQ 号的小端编码） | 硬拦 |
+| 16 位前缀（owner + 精确时间戳） | 硬拦 |
+| 说说链接、昵称、地点 | 硬拦 |
+| 正文 / 评论 / 地名的 4 字中文滑窗 | 硬拦 |
+| 聚合数字（赞数、时间戳） | **只提示不拦**——不是身份信息，且极易与代码常量撞车 |
+| 本机绝对路径、用户名、宿主数据目录路径 | 硬拦 |
 
+> **踩过的坑（v1.7.1 修掉）**：v1.3.0 ~ v1.6.2 的文档注释里写着一条**真实说说 ID** 当示例。
+> 当时的扫描用的是「带上下文」的关键词（`mood/<前缀>`），
+> 而包里的裸 ID 没有 `mood/` 前缀——**整个漏掉了**。
+> 教训：扫隐私必须用**裸标识符**，不能用带上下文的模式。
+> 现在示例已换成合成的 `b327e672…`，历史发布包也做了同样修补。
+>
 > 写测试或文档时**不要用真实账号的 cell_id、说说正文、好友昵称**——
 > 哪怕只是一个 cell_id，也能反解出你的 QQ 号。
 > 仓库里的样例一律按 `moodId()` 同样的编码规则现场合成。
@@ -180,11 +244,12 @@ Node 侧只用内置模块，**没有 npm 运行时依赖**；页面不加载任
 
 ```bash
 cd qq-space-kb
-node tests/test.mjs              # 110 项断言
+node tests/test.mjs              # 121 项断言
 node tests/export-session.mjs    # 48 项断言：一次扫码（会话管理器 / 编排器 / 接线 / 页面）
 node tests/mcp-smoke.mjs         # MCP 服务器冒烟：真启动、真发 JSON-RPC、真调五个工具
 node tests/visualizer-static.mjs # 可视化样例静态审查：信封、主题 token、安全、载荷
 node tests/plugin-package.mjs    # 插件包结构校验：清单、路径、包体积、frontmatter、凭证
+node tests/privacy-scan.mjs      # 隐私回扫：真实数据现算指纹，回扫包内文件与 releases/*.zip
 
 cd ../qq-kb-pipeline
 python3 tests/make_fixtures.py             # 生成合成 fixture（含归档库 sqlite3）
@@ -193,6 +258,10 @@ python3 tests/test_pipeline.py             # 41 项断言
 
 回归测试用 mock Agent 启动真实 Node 服务、走真实 HTTP 路由，
 重点验证「知识库没有就不猜」这条硬规则。
+
+`tests/privacy-scan.mjs` 会去找本机真实知识库
+（`~/.minimax/v2/plugin-data/liveboards/*/kb/unified.jsonl`）；
+本机没有就自动跳过，CI 上跑得动。
 
 ---
 

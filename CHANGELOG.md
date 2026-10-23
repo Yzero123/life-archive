@@ -7,24 +7,96 @@
 | 东西 | 位置 | 用途 |
 |---|---|---|
 | Git tag | `v1.x.y` | 源码级回退：`git checkout v1.x.y` |
-| GitHub Release | <https://github.com/Yzero123/qq-space-kb/releases> | 下载任意历史版本的安装包 |
-| 安装包 zip | `releases/qq-space-kb-<版本>.zip` | 直接在 MCode 里安装 |
+| GitHub Release | <https://github.com/Yzero123/life-archive/releases> | 下载任意历史版本的安装包 |
+| 安装包 zip | `releases/life-archive-<版本>.zip` | 直接在 MCode 里安装 |
 
 > **怎么回退**（三种，按场景选）：
 
 ```bash
 # 1. 只想要某个旧版的安装包 → GitHub Releases 页面下载对应 zip，重新安装
-#    https://github.com/Yzero123/qq-space-kb/releases
+#    https://github.com/Yzero123/life-archive/releases
 
 # 2. 想把源码切回某个版本（改代码、做对比）
-git clone https://github.com/Yzero123/qq-space-kb.git
-cd qq-space-kb
+git clone https://github.com/Yzero123/life-archive.git
+cd life-archive
 git checkout v1.6.2          # 切到旧版
 git checkout main            # 切回来
 
 # 3. 想把仓库整体回退到某个版本（谨慎，会改写历史）
 git revert <commit-sha>      # 逐个撤销
 ```
+
+---
+
+## v3.0.0 — 改名「人生档案」（life-archive）
+
+**项目不再叫「QQ 空间说说知识库」了。** 它早就不只是 QQ 空间的——微信朋友圈、
+你在别人朋友圈下留的言、你点过的赞都在里面。名字得跟上内容。
+
+### 改名映射表
+
+| 东西 | 旧 | 新 |
+|---|---|---|
+| 插件 ID / 包目录 | `qq-space-kb` | **`life-archive`** |
+| 中文名 | QQ 空间说说知识库 | **人生档案** |
+| GitHub 仓库 | `Yzero123/qq-space-kb` | **`Yzero123/life-archive`** |
+| MCP 服务名 / 工具前缀 | `qq-space-kb` | **`life-archive`** |
+| 业务技能 | `qq-space-kb` | **`life-archive`** |
+| 可视化技能 | `qq-space-kb-visualizer` | **`life-archive-visualizer`** |
+| 人设子代理 | `qzone-persona` | **`past-self-persona`** |
+| 离线管线目录 | `qq-kb-pipeline` | **`life-archive-pipeline`** |
+| 方案文档 | `QQ空间说说知识库方案.md` | **`人生档案方案.md`** |
+| 安装包 | `qq-space-kb-<版本>.zip` | **`life-archive-<版本>.zip`** |
+| 数据目录 | `…/liveboards/qq-space-kb` | **`…/liveboards/life-archive`** |
+
+### 为什么升大版本
+
+插件 ID 变了 = **对已安装的用户是破坏性变更**：
+
+- 数据目录名变了，旧数据不会自动跟过去（迁移方法见下）；
+- MCP 工具前缀变了（`mcp__qq-space-kb__kb_search` → `mcp__life-archive__kb_search`）；
+- 技能名、子代理名都变了，委派时要改引用。
+
+功能本身**一行没改**——这版只做身份与文档的重命名。
+
+### 数据迁移
+
+```bash
+# 已装插件
+mv ~/.minimax/plugins/qq-space-kb ~/.minimax/plugins/life-archive
+# 数据目录（不迁移 = 知识库从零开始）
+mv ~/.minimax/v2/plugin-data/liveboards/qq-space-kb \
+   ~/.minimax/v2/plugin-data/liveboards/life-archive
+```
+
+> 数据目录里只有**本机的个人数据**（QQ 空间导出、朋友圈导出、已建的知识库），
+> 它从来就不进安装包、不进 Git 仓库。换目录名不影响任何一条记录。
+
+### 一并说清楚：git 历史里留着什么
+
+按用户决定，**保留完整 git 历史**（旧 tag 与旧 Release 仍可回退）。
+但必须把话说在前面：
+
+| 历史遗留 | 在哪 | 现状 |
+|---|---|---|
+| 真实微信账号标识符 `wxid_…` | `微信朋友圈接入方案-2.0.md` 的 v2.0.0 引入版 | **v2.0.0 已修**，当前工作区与所有安装包都干净 |
+| 真实 QQ 号 | `README.md` 与 `miniapp/node/kb.mjs` 的 v1.6.2 前后 | **v1.7.1 已修**，同上 |
+
+`tests/privacy-scan.mjs` 每次都会拿**本机真实数据现算指纹**回扫包目录、
+仓库文档与所有发布 zip——所以「工作区与所有 zip 不含真实身份信息」是**每次发布都在验的**，
+不是一次性人工检查。
+
+> 想彻底无痕（重写历史、丢掉旧 tag）也可以，但那会失去 v1.x–v2.x 的回退链。
+
+### 测试
+
+| 套件 | 结果 |
+|---|---|
+| `tests/test.mjs` | 121 通过 / 0 失败（1.0 黄金基线） |
+| `tests/test-wx.mjs` | 89 通过 / 0 失败 |
+| `tests/privacy-scan.mjs` | 27 通过 / 0 失败（含正/反样本自检） |
+| `tests/mcp-cache.mjs` | 5 通过 / 0 失败 |
+| 其余套件 | 全过 |
 
 ---
 
@@ -598,7 +670,7 @@ git checkout v2.0.2
 ### 契约
 
 **契约本身没变**（仍是 v1）。变的是插件能吃的**输入范围**变宽了——
-见 [微信朋友圈数据契约-2.0.md](https://github.com/Yzero123/qq-space-kb/blob/main/微信朋友圈数据契约-2.0.md) §3.1。
+见 [微信朋友圈数据契约-2.0.md](https://github.com/Yzero123/life-archive/blob/main/微信朋友圈数据契约-2.0.md) §3.1。
 
 ### 回退
 
@@ -692,7 +764,7 @@ git checkout v2.0.0          # 文档有误但功能正确的版本
 
 ```bash
 git checkout v1.7.1          # 回到 1.0
-# 或从 https://github.com/Yzero123/qq-space-kb/releases 下载 qq-space-kb-1.7.1.zip 重新安装
+# 或从 https://github.com/Yzero123/life-archive/releases 下载 life-archive-1.7.1.zip 重新安装
 ```
 
 ---
@@ -841,8 +913,8 @@ Chrome 进程和调试端口都还活着**。
 | 能力 | 说明 |
 |---|---|
 | MCP 工具（5 个） | `kb_stats` / `kb_search` / `kb_records` / `kb_profile` / `kb_ground_check` |
-| 技能 `qq-space-kb` | 把整套流程写成可复用的操作规程 |
-| 人设子代理 `qzone-persona` | 以「过去的自己」的口吻回答 |
+| 技能 `life-archive` | 把整套流程写成可复用的操作规程 |
+| 人设子代理 `past-self-persona` | 以「过去的自己」的口吻回答 |
 
 MCP 服务器**不调大模型**：检索、统计、接地校验全是确定性计算，措辞生成交给宿主模型。
 「知识库里没有的不许编」因此由代码兜底，而不是靠提示词自觉。
@@ -869,11 +941,11 @@ MCP 服务器**不调大模型**：检索、统计、接地校验全是确定性
 
 | 版本 | 日期 | 一句话 | 安装包 |
 |---|---|---|---|
-| v1.7.1 | 2026-10-23 | 版本管理：CHANGELOG + 隐私回扫脚本 + 修文档示例泄漏 | `releases/qq-space-kb-1.7.1.zip` |
-| v1.7.0 | 2026-10-23 | 对话架构：知识库整体当 prompt，事实红线只管硬事实 | `releases/qq-space-kb-1.7.0.zip` |
-| v1.6.2 | 2026-10-23 | 留言板留言不再被当成「我发过的说说」 | `releases/qq-space-kb-1.6.2.zip` |
-| v1.6.1 | 2026-10-23 | 按钮挪进面板，状态栏按真实状态显示 | `releases/qq-space-kb-1.6.1.zip` |
-| v1.6.0 | 2026-10-23 | 全程只扫一次码：常驻浏览器 + CDP 复用登录态 | `releases/qq-space-kb-1.6.0.zip` |
-| v1.5.0 | 2026-10-22 | 年份分布可视化技能 | `releases/qq-space-kb-1.5.0.zip` |
-| v1.4.0 | 2026-10-22 | 插件化：MCP 工具 + 技能 + 人设子代理 | `releases/qq-space-kb-1.4.0.zip` |
-| v1.3.0 | 2026-10-22 | 第一个版本：导出 + 建库 + 画像 + 对话 | `releases/qq-space-kb-1.3.0.zip` |
+| v1.7.1 | 2026-10-23 | 版本管理：CHANGELOG + 隐私回扫脚本 + 修文档示例泄漏 | `releases/life-archive-1.7.1.zip` |
+| v1.7.0 | 2026-10-23 | 对话架构：知识库整体当 prompt，事实红线只管硬事实 | `releases/life-archive-1.7.0.zip` |
+| v1.6.2 | 2026-10-23 | 留言板留言不再被当成「我发过的说说」 | `releases/life-archive-1.6.2.zip` |
+| v1.6.1 | 2026-10-23 | 按钮挪进面板，状态栏按真实状态显示 | `releases/life-archive-1.6.1.zip` |
+| v1.6.0 | 2026-10-23 | 全程只扫一次码：常驻浏览器 + CDP 复用登录态 | `releases/life-archive-1.6.0.zip` |
+| v1.5.0 | 2026-10-22 | 年份分布可视化技能 | `releases/life-archive-1.5.0.zip` |
+| v1.4.0 | 2026-10-22 | 插件化：MCP 工具 + 技能 + 人设子代理 | `releases/life-archive-1.4.0.zip` |
+| v1.3.0 | 2026-10-22 | 第一个版本：导出 + 建库 + 画像 + 对话 | `releases/life-archive-1.3.0.zip` |

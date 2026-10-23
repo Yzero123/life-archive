@@ -47,13 +47,13 @@ const detect = (candidates) => candidates.find((c) => existsSync(join(c, 'miniap
 const PLUGIN_ROOT = args.pluginRoot
   ? resolve(args.pluginRoot)
   : detect([
-    join(import.meta.dirname, '..', 'qq-space-kb'),
+    join(import.meta.dirname, '..', 'life-archive'),
     join(import.meta.dirname, '..'),
-    join(homedir(), '.minimax', 'plugins', 'qq-space-kb'),
+    join(homedir(), '.minimax', 'plugins', 'life-archive'),
   ]);
 const DATA_DIR = args.dataDir
   ? resolve(args.dataDir)
-  : join(homedir(), '.minimax', 'v2', 'plugin-data', 'liveboards', 'qq-space-kb');
+  : join(homedir(), '.minimax', 'v2', 'plugin-data', 'liveboards', 'life-archive');
 
 if (!existsSync(join(PLUGIN_ROOT, 'miniapp', 'node', 'server.mjs'))) {
   console.error(`找不到插件包根：${PLUGIN_ROOT}`);

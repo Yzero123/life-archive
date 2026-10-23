@@ -1,0 +1,10 @@
+# life-archive-pipeline 运行时依赖
+#
+# 核心管线（merge / chunk / summary 的 none 后端）**零第三方依赖**，
+# 只用 Python 3.10+ 标准库，可直接跑。
+#
+# 只有在需要 jieba 分词等增强能力时才安装：
+#   pip install -r requirements.txt
+
+# 中文分词（可选，用于更准确的话题词抽取）
+jieba>=0.42.1

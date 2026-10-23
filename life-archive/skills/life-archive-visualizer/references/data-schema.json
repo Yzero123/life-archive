@@ -1,0 +1,91 @@
+{
+  "$comment": "业务流（MCP 工具 kb_stats）产出的结构化结果契约。可视化只消费这份结果，不自己取数、不补数据。",
+  "source": {
+    "tool": "kb_stats",
+    "server": "life-archive",
+    "provenance": "本地 QQ 空间知识库（宿主 dataDir 下 kb/unified.jsonl），确定性统计，无远程数据源",
+    "mustNot": [
+      "在可视化里再次调用业务接口",
+      "虚构缺失的年份、条数或结论",
+      "把 ownerUin、persona、dataDir 等字段画进组件"
+    ]
+  },
+  "fields": {
+    "totalRecords": {
+      "type": "integer",
+      "unit": "条",
+      "meaning": "知识库里的说说总条数（含已删除后恢复的）",
+      "nullPolicy": "0 表示空库"
+    },
+    "recoveredRecords": {
+      "type": "integer",
+      "unit": "条",
+      "meaning": "其中通过回溯找回来的已删除说说条数",
+      "nullPolicy": "0 表示没有回溯记录"
+    },
+    "recoveredBodyMissing": {
+      "type": "integer",
+      "unit": "条",
+      "meaning": "回溯记录里正文没能恢复、只剩发布时间与互动痕迹的条数",
+      "nullPolicy": "0"
+    },
+    "recordsWithoutYear": {
+      "type": "integer",
+      "unit": "条",
+      "meaning": "完全无法确定年份的记录数；这些不进入年份分布",
+      "nullPolicy": "0"
+    },
+    "yearFrom": { "type": "string", "format": "YYYY", "meaning": "有年份记录的最早一年", "nullPolicy": "空串" },
+    "yearTo": { "type": "string", "format": "YYYY", "meaning": "有年份记录的最晚一年", "nullPolicy": "空串" },
+    "years": {
+      "type": "array<string>",
+      "meaning": "有记录的年份，升序",
+      "nullPolicy": "空数组"
+    },
+    "yearDistribution": {
+      "type": "array<object>",
+      "meaning": "按年份的构成明细，可视化的主数据集",
+      "itemFields": {
+        "year": { "type": "string", "format": "YYYY", "role": "稳定标识符，作为下钻的 selectedData 键" },
+        "count": { "type": "integer", "unit": "条", "meaning": "该年全部条数" },
+        "recovered": { "type": "integer", "unit": "条", "meaning": "该年由回溯找回的条数" },
+        "bodyMissing": { "type": "integer", "unit": "条", "meaning": "该年正文未能恢复的条数" },
+        "withBody": { "type": "integer", "unit": "条", "meaning": "该年有正文的条数，等于 count - bodyMissing" }
+      },
+      "derivedSeries": {
+        "existingWithBody": "count - recovered —— 现存且有正文的记录",
+        "recoveredWithBody": "recovered - bodyMissing —— 回溯找回且正文也拿回来了",
+        "recoveredNoBody": "bodyMissing —— 回溯找回但正文没能恢复"
+      },
+      "nullPolicy": "空数组表示知识库为空或所有记录都无年份",
+      "sort": "按 year 升序"
+    }
+  },
+  "representativeShape": {
+    "totalRecords": 26,
+    "recoveredRecords": 8,
+    "recoveredBodyMissing": 5,
+    "recordsWithoutYear": 0,
+    "yearFrom": "2013",
+    "yearTo": "2020",
+    "years": ["2013", "2014", "2015", "2016", "2017", "2018", "2019", "2020"],
+    "yearDistribution": [
+      { "year": "2013", "count": 2, "recovered": 0, "bodyMissing": 0, "withBody": 2 },
+      { "year": "2014", "count": 3, "recovered": 1, "bodyMissing": 1, "withBody": 2 },
+      { "year": "2015", "count": 5, "recovered": 2, "bodyMissing": 1, "withBody": 4 },
+      { "year": "2016", "count": 4, "recovered": 1, "bodyMissing": 1, "withBody": 3 },
+      { "year": "2017", "count": 6, "recovered": 3, "bodyMissing": 2, "withBody": 4 },
+      { "year": "2018", "count": 3, "recovered": 1, "bodyMissing": 0, "withBody": 3 },
+      { "year": "2019", "count": 2, "recovered": 0, "bodyMissing": 0, "withBody": 2 },
+      { "year": "2020", "count": 1, "recovered": 0, "bodyMissing": 0, "withBody": 1 }
+    ]
+  },
+  "sampleNotice": "representativeShape 里的数值是合成的样例，只用于说明字段形状与图表基数，不代表任何真实账号的数据。",
+  "states": {
+    "working": "yearDistribution 非空：渲染 KPI 行 + 逐年构成图 + 紧凑明细表。",
+    "loading": "先出结构骨架：KPI 卡片显示 --，图表容器显示占位底色，不显示空图例。",
+    "empty": "totalRecords 为 0 或 yearDistribution 为空：保留卡片与图表框架，居中一行说明「知识库还没有数据，先导出并建库」，不给出发送按钮。",
+    "error": "kb_stats 报错或返回非法结构：保留整体布局，内联一行短提示，不展示半截数据，不暴露原始报错栈。",
+    "permission": "本技能不发起任何鉴权型业务调用；若宿主未授予 MCP 权限，直接走 text 兜底，不画图。"
+  }
+}

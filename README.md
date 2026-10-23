@@ -8,7 +8,7 @@
 这是一个 [Mini App](https://agent.minimax.cn/docs/miniapp/overview) 包，
 可以在 MiniMax Code（MCode）里直接安装使用。
 
-> 当前版本 **v1.7.1**。
+> 当前版本 **v2.0.0**。
 > 完整版本历史见 [`CHANGELOG.md`](CHANGELOG.md)；
 > 想回退到任意旧版，见 [版本历史与回退](#版本历史与回退)。
 
@@ -20,7 +20,7 @@
 
 **方式一：直接导入 zip**（推荐给不想折腾 git 的人）
 
-下载 [`releases/qq-space-kb-1.7.1.zip`](releases/qq-space-kb-1.7.1.zip)，
+下载 [`releases/qq-space-kb-2.0.0.zip`](releases/qq-space-kb-2.0.0.zip)，
 在 MCode 里安装 Mini App 时选择这个包。
 
 > 想要旧版？[Releases 页面](https://github.com/Yzero123/qq-space-kb/releases)有全部历史版本的 zip。
@@ -75,6 +75,7 @@ git clone https://github.com/Yzero123/qq-space-kb.git
 | ④ 对话 | 知识库整体当 prompt 交给宿主大模型；检索只负责找资料，模型负责说话 | 有依据、答得灵活的回答，附来源 |
 | ⑤ 直接在对话里用 | MCP 工具 + 技能 + 人设子代理，不开页面也能问知识库 | 同样的事实红线，代码兜底 |
 | ⑥ 看分布 | 年份分布看板：KPI 四卡 + 逐年构成堆叠柱图 + 紧凑明细表 | 数据密集期与回溯集中期一眼可见 |
+| ⑦ 朋友圈（2.0 起，**可选**） | 导入你自己发的微信朋友圈历史动态 | 同一个知识库多一个来源；画像多出朋友圈专属维度，并给出「两个平台的表达差」 |
 
 几个设计上花了力气的地方：
 
@@ -119,9 +120,12 @@ git clone https://github.com/Yzero123/qq-space-kb.git
 细节和踩过的坑见 [`qq-space-kb/README.md`](qq-space-kb/README.md)（包内文档）
 和 [`QQ空间说说知识库方案.md`](QQ空间说说知识库方案.md)（方案与工程复盘）。
 
-> **2.0 进行中**：接入微信朋友圈历史，用来丰富 bot 的人物画像、让回答更多样。
-> 方案见 [`微信朋友圈接入方案-2.0.md`](微信朋友圈接入方案-2.0.md)
-> （含 GitHub 现成项目调研、本机环境实测、技术路线与「不影响 1.0」的验收清单）。
+> **2.0 已发布**：接上了微信朋友圈历史，两个来源合成一份画像。
+> 朋友圈数据源**默认关**，关着的时候 1.0 的行为一个字都不变——
+> 这条不是靠人说了算，是靠**逐字节黄金基线**锁死的
+> （`tests/fixtures/golden-qzone-1.0.json` 用已安装的 1.7.1 代码生成，每次回归都逐字节比对）。
+> 方案见 [`微信朋友圈接入方案-2.0.md`](微信朋友圈接入方案-2.0.md)，
+> 数据格式见 [`微信朋友圈数据契约-2.0.md`](微信朋友圈数据契约-2.0.md)。
 
 ---
 
@@ -131,6 +135,7 @@ git clone https://github.com/Yzero123/qq-space-kb.git
 
 | 版本 | 日期 | 一句话 | 安装包 |
 |---|---|---|---|
+| v2.0.0 | 2026-10-23 | 微信朋友圈历史接入：双源画像，朋友圈数据源默认关 | [zip](releases/qq-space-kb-2.0.0.zip) |
 | v1.7.1 | 2026-10-23 | 版本管理：CHANGELOG + 隐私回扫脚本 + 修文档示例泄漏 | [zip](releases/qq-space-kb-1.7.1.zip) |
 | v1.7.0 | 2026-10-23 | 对话架构：知识库整体当 prompt | [zip](releases/qq-space-kb-1.7.0.zip) |
 | v1.6.2 | 2026-10-23 | 留言板留言不再被当成「我发过的说说」 | [zip](releases/qq-space-kb-1.6.2.zip) |
@@ -174,6 +179,8 @@ qq-space-kb/
 ├── miniapp/
 │   ├── client/index.html        # 页面（无远程资源、无 npm 依赖）
 │   └── node/                    # Node 侧：路由 / 领域核心 / 状态持久化 / 受控导出运行器
+│       ├── wxsns.mjs            # 2.0：朋友圈 JSON → 统一记录（解析层）
+│       └── wx-export-runner.py  # 2.0：朋友圈取数工具（纯标准库，discover / parse）
 ├── servers.mcp.json             # MCP 服务声明（stdio，零依赖）
 ├── mcp/kb-mcp.mjs               # MCP 服务器：统计 / 检索 / 画像 / 接地校验
 ├── skills/
@@ -185,16 +192,23 @@ qq-space-kb/
 │   └── qzone_feed_recover.js    # 已删除说说回溯探针（实测可用）
 └── tests/
     ├── test.mjs                 # 121 项回归断言
+    ├── test-wx.mjs              # 2.0：56 项断言（含 1.0 逐字节回归锁）
+    ├── fixtures/
+    │   ├── golden-qzone-1.0.json  # 1.0 黄金基线（用 1.7.1 代码生成，逐字节比对）
+    │   ├── qzone-sample.mjs       # 固定的 QQ 空间样例输入
+    │   └── seed-wx-demo.mjs       # 合成朋友圈演示数据
     ├── export-session.mjs       # 「一次扫码」回归：会话管理器 / 编排器 / 接线 / 页面
     ├── mcp-smoke.mjs            # MCP 服务器冒烟测试
     ├── visualizer-static.mjs    # 可视化样例静态审查
     ├── plugin-package.mjs       # 插件包结构校验
-    └── privacy-scan.mjs         # 隐私回扫：真实数据现算指纹，回扫包内文件与发布 zip
+    └── privacy-scan.mjs         # 隐私回扫：真实数据现算指纹，回扫包目录 / 说明文档 / 发布 zip
 
 CHANGELOG.md                      # 版本历史：改了什么、为什么、怎么回退
 qq-kb-pipeline/                   # 早期 Python 参考实现（合并/切块/摘要 + AstrBot 接入）
 QQ空间说说知识库方案.md           # 选型调研 + 关键工程点复盘
-releases/qq-space-kb-*.zip        # 各历史版本的安装包（1.3.0 ~ 1.7.1，全部可直接导入）
+微信朋友圈接入方案-2.0.md         # 2.0 方案：调研 / 实测 / 路线 / 「不影响 1.0」验收清单
+微信朋友圈数据契约-2.0.md         # 2.0 数据契约：朋友圈导出 JSON 的唯一格式
+releases/qq-space-kb-*.zip        # 各历史版本的安装包（1.3.0 ~ 2.0.0，全部可直接导入）
 ```
 
 Node 侧只用内置模块，**没有 npm 运行时依赖**；页面不加载任何远程资源。
@@ -217,7 +231,8 @@ node tests/privacy-scan.mjs
 
 它从本机真实知识库**现算**指纹（QQ 号的十进制与各种 hex 编码、完整 cell_id、
 **8 位 owner 前缀**、16 位前缀、说说链接、昵称、正文 4 字滑窗），
-再回扫包内每一个文件和 `releases/` 下的每一个 zip。脚本里**不写死任何个人信息**。
+再回扫包内每一个文件、**仓库根目录的说明文档**、以及 `releases/` 下的每一个 zip。
+脚本里**不写死任何个人信息**。
 
 | 检查维度 | 性质 |
 |---|---|
@@ -229,12 +244,19 @@ node tests/privacy-scan.mjs
 | 正文 / 评论 / 地名的 4 字中文滑窗 | 硬拦 |
 | 聚合数字（赞数、时间戳） | **只提示不拦**——不是身份信息，且极易与代码常量撞车 |
 | 本机绝对路径、用户名、宿主数据目录路径 | 硬拦 |
+| **微信 wxid**（2.0 起）：本人账号标识（基名 + 带设备后缀）、好友 wxid、动态 ID | 硬拦 |
+| **包内 wxid 字面量**（2.0 起）：`wxid_xxxxxxxx` 形状 | 硬拦。**结构性规则，与本机数据无关，永远生效**；明显是 `demo` / `example` 的合成值放行 |
 
 > **踩过的坑（v1.7.1 修掉）**：v1.3.0 ~ v1.6.2 的文档注释里写着一条**真实说说 ID** 当示例。
 > 当时的扫描用的是「带上下文」的关键词（`mood/<前缀>`），
 > 而包里的裸 ID 没有 `mood/` 前缀——**整个漏掉了**。
 > 教训：扫隐私必须用**裸标识符**，不能用带上下文的模式。
 > 现在示例已换成合成的 `b327e672…`，历史发布包也做了同样修补。
+>
+> **同一类事故第二次（v2.0.0 修掉）**：2.0 方案文档里写着本机真实 wxid。
+> 仓库是公开的，等于把账号标识公开了。
+> 现在回扫范围扩到**说明文档**，并加了一条结构性规则：
+> 包内出现 `wxid_xxxxxxxx` 形状的字面量直接判失败。
 >
 > 写测试或文档时**不要用真实账号的 cell_id、说说正文、好友昵称**——
 > 哪怕只是一个 cell_id，也能反解出你的 QQ 号。
@@ -249,6 +271,7 @@ node tests/privacy-scan.mjs
 ```bash
 cd qq-space-kb
 node tests/test.mjs              # 121 项断言
+node tests/test-wx.mjs           # 56 项断言（2.0）：1.0 逐字节回归锁 / 解析 / 双源画像 / 端到端
 node tests/export-session.mjs    # 48 项断言：一次扫码（会话管理器 / 编排器 / 接线 / 页面）
 node tests/mcp-smoke.mjs         # MCP 服务器冒烟：真启动、真发 JSON-RPC、真调五个工具
 node tests/visualizer-static.mjs # 可视化样例静态审查：信封、主题 token、安全、载荷

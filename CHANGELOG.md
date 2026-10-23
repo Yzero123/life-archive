@@ -52,6 +52,31 @@ ditto /Applications/WeChat.app.orig /Applications/WeChat.app
 原版保留在 `.orig`，随时一条 `mv` 还原。副作用：app 属主变了，**腾讯自动更新器行为未知**，
 抓完密钥后建议还原。
 
+### 新增：真实链路演练脚本
+
+`tools/real-instance-drill.mjs` —— 在**真实插件 dataDir** 上跑一遍完整验收路径：
+
+```
+备份 dataDir → 导入 → 启用 → 重建 → 双源画像 → 关掉 → 重建 → 必须回到纯 1.0 → 清空 → 还原 dataDir
+```
+
+全程用**合成**朋友圈数据（`tests/fixtures/seed-wx-demo.mjs`），走的是真实 HTTP 路由
+（`/api/wx/import` → `/api/wx/switch` → `/api/kb/build` → `/api/profile/build` → `/api/wx/clear`），
+不是单元测试替身。跑完自动把 dataDir 还原成演练前的状态。
+
+本机实测结果（真实 QQ 空间数据 90 条）：
+
+| 检查项 | 结果 |
+|---|---|
+| 导入 | kept=8，notMine=1（好友那条被正确过滤） |
+| 双源画像 | 「共 98 条动态（QQ 空间 90 条，微信朋友圈 8 条）」+ 朋友圈专属维度 |
+| 关掉后重建 | 回到「共 90 条说说」，`unified.jsonl` 98 → 90 行 |
+| 清空 | 状态回到「未导入 / 已关闭」 |
+| 还原 | dataDir 与演练前完全一致 |
+
+> 为什么要有这个：单元测试跑在临时目录里，**看不出真实数据上的口径漂移**。
+> 这个脚本把「第一次用的人」的完整路径在真实环境预演一遍。
+
 ### 同时改了
 
 `tools/wx-path-check.py` 的结论段改成给出**两条路**（A 改权限 / B 换副本），并写清各自的前置与回退。

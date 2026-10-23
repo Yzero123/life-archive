@@ -108,7 +108,8 @@ try {
     console.log(`启用   ：ok=${sw.ok} enabled=${sw.enabled}`);
 
     const built = await call('/api/kb/build', {});
-    console.log(`建库   ：ok=${built.ok} 合并后 ${built.merged ?? built.count ?? '?'} 条`);
+    const builtStats = built.stats ?? {};
+    console.log(`建库   ：ok=${built.ok} 合并后 ${builtStats.totalRecords ?? '?'} 条记录 / ${builtStats.chunkCount ?? '?'} 个知识块`);
 
     if (!args.skipProfile) {
       await call('/api/profile/build', {});

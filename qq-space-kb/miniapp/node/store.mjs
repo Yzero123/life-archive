@@ -28,6 +28,15 @@ const DEFAULT_STATE = {
     yearFrom: '',
     yearTo: '',
   },
+  // 2.0：微信朋友圈数据源。默认关——1.0 的行为一个字都不能变。
+  wx: {
+    enabled: false,
+    imported: false,
+    count: 0,
+    owner: '',
+    source: '',
+    importedAt: 0,
+  },
   lastError: '',
   updatedAt: 0,
 };
@@ -81,6 +90,20 @@ export class Store {
 
   get archivePath() {
     return join(this.rawDir, 'qzone_archive.json');
+  }
+
+  /**
+   * 2.0：微信朋友圈原始数据落点。
+   *
+   * 名字与 1.0 的两个 raw 文件平行，`raw/` 目录本来就是「外部工具的产物」，
+   * 外部解密工具把 JSON 放这里，Node 侧只负责读它、解析它。
+   */
+  get wxSnsPath() {
+    return join(this.rawDir, 'wechat_sns.json');
+  }
+
+  async removeWxSns() {
+    await rm(this.wxSnsPath, { force: true });
   }
 
   async writeRaw(name, content) {

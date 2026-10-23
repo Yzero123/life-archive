@@ -6,10 +6,10 @@
 //   3. 合并两路数据源、切知识块、建检索索引
 //   4. 对话：先检索，检索不到直接回固定话术；检索到才让 Agent 基于资料作答，并做接地校验
 
-import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { homedir, tmpdir } from 'node:os';
+import { basename, join } from 'node:path';
 
 import {
   PHASE,
@@ -35,6 +35,12 @@ import {
   search,
   TIME_SOURCE,
 } from './kb.mjs';
+
+import {
+  countBySource,
+  parseWechatSns,
+  stripDeviceSuffix,
+} from './wxsns.mjs';
 
 const CHAT_TOP_K = 6;
 const CHAT_CONTEXT_LIMIT = 12;
@@ -429,6 +435,21 @@ async function handle(request, response, runtime) {
   if (request.method === 'POST' && path === '/api/reset') {
     return json(response, await reset(runtime));
   }
+  // 2.0：微信朋友圈。默认关，关着的时候 1.0 的行为一个字都不变。
+  if (request.method === 'GET' && path === '/api/wx/status') {
+    return json(response, await wxStatus(runtime));
+  }
+  if (request.method === 'POST' && path === '/api/wx/import') {
+    const body = await readBody(request);
+    return json(response, await importWx(runtime, body));
+  }
+  if (request.method === 'POST' && path === '/api/wx/switch') {
+    const body = await readBody(request);
+    return json(response, await switchWx(runtime, body));
+  }
+  if (request.method === 'POST' && path === '/api/wx/clear') {
+    return json(response, await clearWx(runtime));
+  }
 
   response.writeHead(404, { 'content-type': 'application/json; charset=utf-8' });
   response.end(JSON.stringify({ error: 'not_found' }));
@@ -574,6 +595,15 @@ async function snapshot(runtime) {
     hasArchive: raw.includes('qzone_archive.json'),
     // 演示数据标记：界面要明确提示，避免把样例当成自己的真实说说
     isDemo: raw.includes('demo.json'),
+    // 2.0：朋友圈数据源。默认关——页面据此把整块面板折叠起来。
+    wx: {
+      enabled: Boolean(store.state.wx?.enabled),
+      imported: Boolean(store.state.wx?.imported),
+      count: Number(store.state.wx?.count ?? 0),
+      owner: String(store.state.wx?.owner ?? ''),
+      importedAt: Number(store.state.wx?.importedAt ?? 0),
+      targetDir: store.rawDir,
+    },
     hasProfile: Boolean(runtime.profile),
     profileSource: runtime.profile?.source ?? '',
     profileBuilding: Boolean(runtime.profileJob?.running),
@@ -769,7 +799,11 @@ async function buildKnowledgeBase(runtime, body) {
 
     const messages = await store.readRaw('qzoneexport_messages.json');
     const archive = await store.readRaw('qzone_archive.json');
-    if (!messages && !archive) {
+    // 2.0：朋友圈是**可选**数据源，默认关。关着的时候这段完全不动，
+    // 1.0 的构建路径逐行保持原样。
+    const wxEnabled = Boolean(store.state.wx?.enabled);
+    const wxRaw = wxEnabled ? await store.readRaw('wechat_sns.json') : null;
+    if (!messages && !archive && !wxRaw) {
       await store.saveState({ phase: PHASE.FAILED, message: '还没有任何导出数据', lastError: '请先完成导出' });
       return { ok: false, message: '还没有任何导出数据，请先完成导出' };
     }
@@ -777,9 +811,16 @@ async function buildKnowledgeBase(runtime, body) {
     const records = [];
     if (messages) records.push(...parseQzoneExport(messages));
     if (archive) records.push(...parseQzoneArchive(archive, ownerUin));
+    let wxStats = null;
+    if (wxRaw) {
+      const parsed = parseWechatSns(wxRaw, {});
+      records.push(...parsed.records);
+      wxStats = parsed.stats;
+    }
     if (!records.length) {
-      await store.saveState({ phase: PHASE.FAILED, message: '没有解析出任何说说', lastError: '数据格式无法识别' });
-      return { ok: false, message: '没有解析出任何说说' };
+      const emptyMessage = wxRaw ? '没有解析出任何动态' : '没有解析出任何说说';
+      await store.saveState({ phase: PHASE.FAILED, message: emptyMessage, lastError: '数据格式无法识别' });
+      return { ok: false, message: emptyMessage };
     }
 
     const merged = mergeRecords(records);
@@ -829,6 +870,12 @@ async function buildKnowledgeBase(runtime, body) {
       yearFrom: years.length ? String(new Date(Math.min(...years) * 1000).getFullYear()) : '',
       yearTo: years.length ? String(new Date(Math.max(...years) * 1000).getFullYear()) : '',
       recoveryNote,
+      // 2.0：来源分布与朋友圈单独的计数。1.0 时 bySource 只有 qzone 一项。
+      bySource: countBySource(merged),
+      wx: wxStats
+        ? { count: wxStats.kept, total: wxStats.total, notMine: wxStats.notMine, owner: wxStats.owner }
+        : { count: 0, total: 0, notMine: 0, owner: '' },
+      wxEnabled,
     };
 
     runtime.chatContext = [];
@@ -887,6 +934,186 @@ async function reset(runtime) {
   runtime.chatContext = [];
   runtime.chatJobs.clear();
   return { ok: true };
+}
+
+// ---------------------------------------------------------------------------
+// 微信朋友圈（2.0）
+// ---------------------------------------------------------------------------
+/**
+ * 朋友圈 JSON 的候选位置。
+ *
+ * 外部解密工具（SIWX 等）把导出结果放在它自己的目录里，用户不一定记得放哪。
+ * 与其让人猜路径，不如扫几个常见位置。扫描是有界的：只下探一层目录、
+ * 只认两种文件名前缀，不做全盘搜索。
+ */
+async function scanWxCandidates(runtime) {
+  const found = [];
+  const seen = new Set();
+  const push = (path) => {
+    if (!path || seen.has(path)) return;
+    seen.add(path);
+    found.push(path);
+  };
+  push(runtime.store.wxSnsPath);
+  const home = homedir();
+  const roots = [join(home, 'Documents'), join(home, 'Downloads'), join(home, 'Desktop')];
+  const pattern = /^(wechat_sns.*\.json|.*朋友圈.*\.json)$/;
+  for (const root of roots) {
+    let entries = [];
+    try {
+      entries = await readdir(root, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      const full = join(root, entry.name);
+      if (entry.isFile()) {
+        if (pattern.test(entry.name)) push(full);
+        continue;
+      }
+      if (!entry.isDirectory()) continue;
+      let sub = [];
+      try {
+        sub = await readdir(full, { withFileTypes: true });
+      } catch {
+        continue;
+      }
+      for (const item of sub) {
+        if (item.isFile() && pattern.test(item.name)) push(join(full, item.name));
+      }
+    }
+  }
+  return found;
+}
+
+async function wxStatus(runtime) {
+  const { store } = runtime;
+  const wx = store.state.wx ?? {};
+  let rawExists = false;
+  try {
+    await stat(store.wxSnsPath);
+    rawExists = true;
+  } catch {
+    rawExists = false;
+  }
+  return {
+    ok: true,
+    enabled: Boolean(wx.enabled),
+    imported: Boolean(wx.imported && rawExists),
+    count: Number(wx.count ?? 0),
+    owner: String(wx.owner ?? ''),
+    source: String(wx.source ?? ''),
+    importedAt: Number(wx.importedAt ?? 0),
+    targetDir: store.rawDir,
+    rawExists,
+  };
+}
+
+/**
+ * 导入朋友圈数据。
+ *
+ * 三种来源都能进：显式路径、常见位置自动扫描、请求体直接带 payload。
+ * 导入只做「落盘 + 记账」，真正的解析与合并发生在「构建知识库」那一步——
+ * 长耗时的活不挂在 HTTP 请求里。
+ */
+async function importWx(runtime, body) {
+  const { store } = runtime;
+  let payload = null;
+  let sourcePath = '';
+
+  const inline = body?.payload;
+  if (inline && typeof inline === 'object') {
+    payload = inline;
+    sourcePath = 'inline';
+  } else {
+    const explicit = String(body?.path ?? '').trim();
+    const candidates = explicit ? [explicit] : await scanWxCandidates(runtime);
+    for (const candidate of candidates) {
+      try {
+        payload = JSON.parse(await readFile(candidate, 'utf8'));
+        sourcePath = candidate;
+        break;
+      } catch {
+        // 读不到或不是合法 JSON，换下一个候选
+      }
+    }
+  }
+
+  if (!payload || typeof payload !== 'object') {
+    return {
+      ok: false,
+      message: '没找到可导入的朋友圈数据。把导出的 JSON 放进下面的目录，或直接填文件路径。',
+      targetDir: store.rawDir,
+    };
+  }
+
+  const forcedOwner = String(body?.owner ?? '').trim();
+  const probe = parseWechatSns(payload, { ownerWxid: forcedOwner });
+
+  if (!probe.stats.total) {
+    return {
+      ok: false,
+      message: '这份 JSON 里没解析出任何动态。期望形状：{"meta": {...}, "posts": [...]}',
+      targetDir: store.rawDir,
+    };
+  }
+  if (!probe.stats.kept) {
+    // 一条都没留下只有两种可能：作者对不上，或者这份数据本来就不是本人账号。
+    // 如实说清是哪一种，不要糊一句「导入失败」。
+    return {
+      ok: false,
+      message: `这份数据里有 ${probe.stats.total} 条动态，但没有一条是本人发的`
+        + `（账号标识：${probe.stats.owner || '文件里没标'}）。请确认导出的是本人账号，或填入自己的 wxid。`,
+      total: probe.stats.total,
+      owner: probe.stats.owner,
+      targetDir: store.rawDir,
+    };
+  }
+
+  await store.writeRaw('wechat_sns.json', payload);
+  const owner = probe.stats.owner || '';
+  await store.saveState({
+    wx: {
+      enabled: true,
+      imported: true,
+      count: probe.stats.kept,
+      owner,
+      source: sourcePath === 'inline' ? 'inline' : 'file',
+      importedAt: Date.now(),
+    },
+  });
+  return {
+    ok: true,
+    count: probe.stats.kept,
+    total: probe.stats.total,
+    notMine: probe.stats.notMine,
+    owner,
+    file: sourcePath === 'inline' ? 'inline' : basename(sourcePath),
+    needRebuild: true,
+  };
+}
+
+async function switchWx(runtime, body) {
+  const { store } = runtime;
+  const enabled = Boolean(body?.enabled);
+  const wx = store.state.wx ?? {};
+  if (enabled && !wx.imported) {
+    return { ok: false, message: '还没有导入朋友圈数据，先导入再开启。' };
+  }
+  await store.saveState({ wx: { ...wx, enabled } });
+  return { ok: true, enabled, needRebuild: true };
+}
+
+async function clearWx(runtime) {
+  const { store } = runtime;
+  await store.removeWxSns();
+  await store.saveState({
+    wx: { enabled: false, imported: false, count: 0, owner: '', source: '', importedAt: 0 },
+  });
+  runtime.index = null;
+  runtime.chatContext = [];
+  runtime.chatJobs.clear();
+  return { ok: true, needRebuild: true };
 }
 
 // ---------------------------------------------------------------------------

@@ -68,7 +68,27 @@ async function findRealKb() {
     const records = raw.split('\n').filter(Boolean).map((line) => {
       try { return JSON.parse(line); } catch { return null; }
     }).filter(Boolean);
-    if (records.length) return { dir, records };
+    if (records.length) return { dir, records, dirs };
+  }
+  return null;
+}
+
+/**
+ * 找本机的**真实朋友圈原始数据**（2.0）。
+ *
+ * 朋友圈侧的指纹从真实导出里现算，脚本里同样不写死任何个人信息。
+ * 本机还没导入过朋友圈数据时返回 null——那不是失败，是没有可比对的东西。
+ */
+async function findRealWxRaw(dirs) {
+  for (const dir of dirs) {
+    const path = join(dir, 'raw/wechat_sns.json');
+    if (!existsSync(path)) continue;
+    try {
+      const payload = JSON.parse(await readFile(path, 'utf8'));
+      if (payload && typeof payload === 'object') return { path, payload };
+    } catch {
+      // 文件在但读不出来，忽略
+    }
   }
   return null;
 }
@@ -192,6 +212,80 @@ function buildFingerprints(records) {
 }
 
 // ---------------------------------------------------------------------------
+// 2b. 微信朋友圈侧的指纹（2.0）
+// ---------------------------------------------------------------------------
+
+/**
+ * 朋友圈侧的裸标识符。
+ *
+ * 和 QQ 侧同一套原则：**从真实数据现算，不写死**。
+ * 要扫的是：
+ *   - 本人 wxid（基名 + 带设备后缀的目录名两种写法）
+ *   - 好友 wxid（点赞/评论里的人）
+ *   - 动态 snsId（完整 ID）
+ *
+ * 这些都是「裸标识符」——不带任何上下文关键词。
+ * 之前 v1.3.0 的泄漏就是因为扫的是 `mood/<前缀>` 这种带上下文的写法，
+ * 包里的裸 ID 反而全漏了。
+ */
+function buildWxFingerprints(payload) {
+  const wxids = new Set();
+  const snsIds = new Set();
+
+  const addWxid = (value) => {
+    const text = String(value ?? '').trim();
+    if (!text) return;
+    wxids.add(text);
+    // 目录名常带设备后缀（wxid_xxx_4160），基名也要单独收
+    const base = text.replace(/_\d+$/, '');
+    if (base && base !== text) wxids.add(base);
+  };
+
+  const meta = payload?.meta ?? {};
+  addWxid(meta.account);
+  addWxid(payload?.owner_wxid);
+
+  const posts = Array.isArray(payload?.posts) ? payload.posts
+    : Array.isArray(payload?.moments) ? payload.moments : [];
+  for (const post of posts) {
+    if (!post || typeof post !== 'object') continue;
+    addWxid(post.author ?? post.username ?? post.user_name);
+    const id = String(post.id ?? post.tid ?? '').trim();
+    if (id) snsIds.add(id);
+    for (const like of post.likes ?? []) {
+      addWxid(typeof like === 'string' ? like : like?.username);
+    }
+    for (const comment of post.comments ?? []) {
+      addWxid(typeof comment === 'string' ? comment : comment?.username);
+    }
+  }
+
+  return {
+    wxids: [...wxids].filter(Boolean).sort((a, b) => b.length - a.length),
+    snsIds: [...snsIds].filter(Boolean).sort((a, b) => b.length - a.length),
+  };
+}
+
+/**
+ * 结构性规则：包内**不允许**出现 wxid 字面量。
+ *
+ * 这条比「和本机数据比对」更严也更通用——插件永远不该硬编码任何人的账号标识符，
+ * 哪怕是「示例里顺手写了一个自己的 wxid」。所以只要包内出现 `wxid_xxxxxxxx`
+ * 这种形状的字面量就判失败，除非它明显是占位/合成值。
+ */
+const WXID_LITERAL = /wxid_[A-Za-z0-9]{6,}/g;
+const SYNTHETIC_WXID = /wxid_[A-Za-z0-9]*(demo|example|test|sample|placeholder|your|xxx)/i;
+
+function scanWxLiterals(text) {
+  const hits = [];
+  for (const match of text.match(WXID_LITERAL) ?? []) {
+    if (SYNTHETIC_WXID.test(match)) continue;
+    hits.push({ kind: 'wxid 字面量（包内不该硬编码账号标识符）', needle: match });
+  }
+  return hits;
+}
+
+// ---------------------------------------------------------------------------
 // 3. 回扫
 // ---------------------------------------------------------------------------
 
@@ -209,7 +303,7 @@ async function walk(dir, out = []) {
 }
 
 /** 在一段文本里找命中。返回 { kind, needle } 列表。 */
-function scanText(text, fp) {
+function scanText(text, fp, wxfp) {
   const hits = [];
   const push = (kind, needle) => { if (text.includes(needle)) hits.push({ kind, needle }); };
 
@@ -221,6 +315,10 @@ function scanText(text, fp) {
   for (const nick of fp.nicknames) push('昵称 / 地点', nick);
   for (const w of fp.windows) push('真实文本片段', w);
 
+  // 2.0：微信侧的裸标识符
+  for (const wxid of wxfp?.wxids ?? []) push('wxid（微信账号标识符）', wxid);
+  for (const id of wxfp?.snsIds ?? []) push('朋友圈动态 ID', id);
+
   // 聚合数字：非身份信息，只提示不拦
   for (const n of fp.numbers) {
     if (!text.includes(n)) continue;
@@ -231,19 +329,25 @@ function scanText(text, fp) {
   return hits;
 }
 
-async function scanTarget(target, label, fp) {
+async function scanTarget(target, label, fp, wxfp) {
   const hits = [];
   if (existsSync(target) && (await stat(target)).isDirectory()) {
     for (const file of await walk(target)) {
       if (!TEXT_EXT.has(extname(file))) continue;
       const text = await readFile(file, 'utf8').catch(() => '');
       if (!text) continue;
-      for (const hit of scanText(text, fp)) {
+      for (const hit of scanText(text, fp, wxfp)) {
+        hits.push({ ...hit, where: relative(PKG_ROOT, file) });
+      }
+      // 结构性规则：包内不许出现 wxid 字面量（和本机数据无关，永远生效）
+      for (const hit of scanWxLiterals(text)) {
         hits.push({ ...hit, where: relative(PKG_ROOT, file) });
       }
     }
   } else {
-    hits.push(...scanText(await readFile(target, 'utf8').catch(() => ''), fp).map((h) => ({ ...h, where: label })));
+    const text = await readFile(target, 'utf8').catch(() => '');
+    hits.push(...scanText(text, fp, wxfp).map((h) => ({ ...h, where: label })));
+    hits.push(...scanWxLiterals(text).map((h) => ({ ...h, where: label })));
   }
   return hits;
 }
@@ -259,8 +363,17 @@ if (!real) {
 }
 
 const fp = buildFingerprints(real.records);
+const wxRaw = await findRealWxRaw(real.dirs ?? CANDIDATE_DIRS);
+const wxfp = wxRaw ? buildWxFingerprints(wxRaw.payload) : null;
 console.log(`  真实知识库：${real.dir}`);
-console.log(`  指纹规模：QQ 号 ${fp.qqAll.length} 种写法 / 说说 ID ${fp.cellIds.length} / owner 前缀 ${fp.ownerHex.length} / 文本片段 ${fp.windows.length} / 聚合数字 ${fp.numbers.length}\n`);
+console.log(`  指纹规模：QQ 号 ${fp.qqAll.length} 种写法 / 说说 ID ${fp.cellIds.length} / owner 前缀 ${fp.ownerHex.length} / 文本片段 ${fp.windows.length} / 聚合数字 ${fp.numbers.length}`);
+if (wxfp) {
+  console.log(`  朋友圈指纹：wxid ${wxfp.wxids.length} 个 / 动态 ID ${wxfp.snsIds.length} 个`);
+} else {
+  console.log('  ℹ️ 本机没有导入过朋友圈数据，wxid / 动态 ID 的回扫跳过；'
+    + '「包内不许出现 wxid 字面量」的结构性规则照常生效。');
+}
+console.log('');
 
 const targets = [{ path: PKG_ROOT, label: '包目录' }];
 const releasesDir = join(REPO_ROOT, 'releases');
@@ -270,8 +383,29 @@ if (existsSync(releasesDir)) {
   }
 }
 
+// 仓库根目录的说明文档也要扫。
+// 2.0 的方案文档里曾经写着本机真实 wxid——那和 v1.3.0 文档示例里的真实 cell_id
+// 是同一类事故：写文档时「顺手」把真实标识符贴了进去。
+const docDirs = new Set([REPO_ROOT, resolve(PKG_ROOT, '..', '..', 'repo-qq-space-kb')]);
+for (const dir of docDirs) {
+  if (!existsSync(dir)) continue;
+  let entries = [];
+  try {
+    entries = await readdir(dir, { withFileTypes: true });
+  } catch {
+    continue;
+  }
+  for (const entry of entries) {
+    if (!entry.isFile() || !entry.name.endsWith('.md')) continue;
+    targets.push({ path: join(dir, entry.name), label: `文档 ${entry.name}` });
+  }
+}
+// 同一个目录可能既是 REPO_ROOT 又是工作区里的兄弟目录，去重免得扫两遍。
+const seenTargets = new Set();
 for (const target of targets) {
-  const hits = await scanTarget(target.path, target.label, fp);
+  if (seenTargets.has(target.path)) continue;
+  seenTargets.add(target.path);
+  const hits = await scanTarget(target.path, target.label, fp, wxfp);
   ok(`${target.label} 无真实身份信息`, () => {
     assert(hits.length === 0, hits.slice(0, 5).map((h) => `${h.where} ← ${h.kind} ${JSON.stringify(h.needle)}`).join('；'));
   });

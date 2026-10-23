@@ -27,6 +27,22 @@ export const TIME_SOURCE = {
   UNKNOWN: 'unknown',
 };
 
+/**
+ * 微信朋友圈记录的 ID 前缀（2.0）。
+ *
+ * 朋友圈与 QQ 空间是**两个来源的同一种记录**，走同一套合并/切块/检索链路。
+ * ID 加前缀是为了让 mergeRecords 的去重逻辑天然不碰撞——
+ * 不用改 1.0 的任何一行合并代码。
+ */
+export const WX_ID_PREFIX = 'wx-';
+export const WX_SOURCE = 'wechat-sns';
+export const WX_KIND = 'moments';
+
+/** 这条记录是不是朋友圈来的。 */
+export function isWxRecord(record) {
+  return String(record?.id ?? '').startsWith(WX_ID_PREFIX);
+}
+
 const TAG_RE = /<[^>]+>/g;
 const BB_RE = /\[([^\[\]]{1,12})\]/g;
 const WS_RE = /\s+/g;
@@ -616,6 +632,9 @@ export function renderChunk(record, { maxComments = 3, maxCommentLen = 40, maxCh
   const bodyContent = rawContent || (record.body_missing ? '（这条说说已删除，正文未能恢复）' : '');
   const build = (commentSlice, body) => {
     const lines = [renderTimeLine(record)];
+    // 朋友圈记录要标出来源：模型得知道这条是发在朋友圈的，不是 QQ 空间。
+    // 纯 QQ 空间数据不受影响（这一行只在有朋友圈记录时出现）。
+    if (isWxRecord(record)) lines.push('[来源] 微信朋友圈');
     if (record.recovered) lines.push('[来源] 已删除后从互动残留恢复');
     if (record.location) lines.push(`[位置] ${record.location}`);
     const likeCount = Number(record.like_count ?? 0);
@@ -722,6 +741,151 @@ export function extractKeywords(texts, limit = 12) {
   return { keywords: picked, confident: true };
 }
 
+/** 朋友圈卡片类型的人读标签。 */
+const WX_CARD_LABEL = {
+  link: '链接',
+  music: '音乐',
+  note: '笔记',
+  finder: '视频号',
+  finder_live: '直播',
+};
+
+function avgContentLength(records) {
+  const lengths = records
+    .map((r) => String(r.content ?? '').trim())
+    .filter((t) => t.length)
+    .map((t) => t.length);
+  if (!lengths.length) return 0;
+  return Math.round(lengths.reduce((a, b) => a + b, 0) / lengths.length);
+}
+
+function imageRatio(records) {
+  if (!records.length) return 0;
+  const withImage = records.filter((r) => (r.images ?? []).length).length;
+  return Math.round((withImage / records.length) * 100);
+}
+
+/**
+ * 朋友圈专属画像维度（2.0）。
+ *
+ * 朋友圈和 QQ 空间是**两个不同的表达场域**：发圈频率、发布时段、常去的地方、
+ * 配图习惯、互动的人是两套分布。混在一起统计会互相稀释——
+ * 「最爱去的城市」被两个平台的记录平均掉，就谁也说不准了。
+ * 所以朋友圈单独出一组维度，最后补一条「两个平台的表达差」，
+ * 让模型能说出「你在朋友圈话更短、但更爱配图」这种只有双源才看得到的结论。
+ *
+ * 纯 QQ 空间数据时返回空数组——调用方原样拼进去，输出与 1.0 逐字节一致。
+ */
+export function buildWxDimensions(wxRecords = [], qqRecords = []) {
+  const lines = [];
+  if (!wxRecords.length) return lines;
+
+  const times = wxRecords.map((r) => r.published_at).filter((t) => t > 0).sort((a, b) => a - b);
+  const from = times.length ? formatTimestamp(times[0], false) : '未知';
+  const to = times.length ? formatTimestamp(times[times.length - 1], false) : '未知';
+  lines.push(`[朋友圈] 共 ${wxRecords.length} 条，跨度 ${from} → ${to}`);
+
+  // 发圈节奏：逐年条数 + 平均频率
+  const yearCount = new Map();
+  const monthCount = new Map();
+  const hourCount = new Map();
+  for (const record of wxRecords) {
+    if (!record.published_at) continue;
+    const y = yearKey(record.published_at);
+    yearCount.set(y, (yearCount.get(y) ?? 0) + 1);
+    const m = monthKey(record.published_at);
+    monthCount.set(m, (monthCount.get(m) ?? 0) + 1);
+    const hour = new Date(record.published_at * 1000).getHours();
+    const bucket = hour < 6 ? '凌晨' : hour < 12 ? '上午' : hour < 14 ? '中午'
+      : hour < 18 ? '下午' : hour < 23 ? '晚上' : '深夜';
+    hourCount.set(bucket, (hourCount.get(bucket) ?? 0) + 1);
+  }
+  const yearEntries = [...yearCount.entries()].sort();
+  if (yearEntries.length) {
+    const perYear = (wxRecords.length / yearEntries.length).toFixed(1);
+    lines.push(
+      `[朋友圈·发圈节奏] ${yearEntries.map(([y, n]) => `${y} 年 ${n} 条`).join('、')}；平均每年 ${perYear} 条`,
+    );
+  }
+  const peakMonth = [...monthCount.entries()].sort((a, b) => b[1] - a[1])[0];
+  if (peakMonth) lines.push(`[朋友圈·最密集的月份] ${peakMonth[0]}（${peakMonth[1]} 条）`);
+  const peakHour = [...hourCount.entries()].sort((a, b) => b[1] - a[1])[0];
+  const hourTotal = [...hourCount.values()].reduce((a, b) => a + b, 0);
+  if (peakHour && hourTotal) {
+    lines.push(
+      `[朋友圈·发布时段] 最常在${peakHour[0]}发（${peakHour[1]} 条，占 ${Math.round((peakHour[1] / hourTotal) * 100)}%）`,
+    );
+  }
+
+  // 常出现的位置
+  const locationCount = new Map();
+  for (const record of wxRecords) {
+    if (record.location) locationCount.set(record.location, (locationCount.get(record.location) ?? 0) + 1);
+  }
+  const topLocations = [...locationCount.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5);
+  if (topLocations.length) {
+    lines.push(`[朋友圈·常出现的位置] ${topLocations.map(([loc, n]) => `${loc}(${n}次)`).join('、')}`);
+  }
+
+  // 媒体偏好：配图率、带视频率、每条平均几张
+  const withImage = wxRecords.filter((r) => (r.images ?? []).length).length;
+  const withVideo = wxRecords.filter((r) => (r.videos ?? []).length).length;
+  const imageTotal = wxRecords.reduce((sum, r) => sum + (r.images ?? []).length, 0);
+  if (withImage || withVideo) {
+    const parts = [];
+    if (withImage) parts.push(`${Math.round((withImage / wxRecords.length) * 100)}% 配了图`);
+    if (withVideo) parts.push(`${Math.round((withVideo / wxRecords.length) * 100)}% 带视频`);
+    const extra = withImage ? `，平均每条 ${(imageTotal / withImage).toFixed(1)} 张图` : '';
+    lines.push(`[朋友圈·媒体偏好] ${parts.join('、')}${extra}`);
+  }
+
+  // 内容类型分布
+  const kindCount = new Map();
+  for (const record of wxRecords) {
+    const cardKind = record.raw?.card_kind ?? '';
+    let label = WX_CARD_LABEL[cardKind] ?? '';
+    if (!label) {
+      if ((record.videos ?? []).length) label = '视频';
+      else if ((record.images ?? []).length) label = '图片';
+      else label = '文字';
+    }
+    kindCount.set(label, (kindCount.get(label) ?? 0) + 1);
+  }
+  const topKinds = [...kindCount.entries()].sort((a, b) => b[1] - a[1]);
+  if (topKinds.length) {
+    lines.push(
+      `[朋友圈·内容类型] ${topKinds.map(([label, n]) => `${label} ${n} 条`).join('、')}`,
+    );
+  }
+
+  // 互动最多的人（赞 + 评论都算）
+  const personCount = new Map();
+  for (const record of wxRecords) {
+    for (const comment of record.comments ?? []) {
+      if (comment.nick) personCount.set(comment.nick, (personCount.get(comment.nick) ?? 0) + 1);
+    }
+    for (const like of record.like_users ?? []) {
+      if (like.nick) personCount.set(like.nick, (personCount.get(like.nick) ?? 0) + 1);
+    }
+  }
+  const topPeople = [...personCount.entries()].sort((a, b) => b[1] - a[1]).slice(0, 6);
+  if (topPeople.length) {
+    lines.push(`[朋友圈·互动最多的人] ${topPeople.map(([name, count]) => `${name}(${count}次)`).join('、')}`);
+  }
+
+  // 两个平台的表达差——只有双源才看得到的结论
+  if (qqRecords.length) {
+    const wxLen = avgContentLength(wxRecords);
+    const qqLen = avgContentLength(qqRecords);
+    lines.push(
+      `[两个平台的表达差] 朋友圈平均 ${wxLen} 字、${imageRatio(wxRecords)}% 配图；`
+      + `QQ 空间平均 ${qqLen} 字、${imageRatio(qqRecords)}% 配图`,
+    );
+  }
+
+  return lines;
+}
+
 /**
  * 人物画像（确定性基线）。
  * 完全由全量记录统计得出，不含任何模型生成内容——即使不接大模型，画像层也能用。
@@ -780,9 +944,21 @@ export function buildProfile(records, summaries = []) {
   );
 
   const lines = [];
+  // 2.0：朋友圈与 QQ 空间是**两种来源**。口径必须条件化——
+  // 纯 QQ 空间数据时，这里的输出与 1.0 逐字节一致；
+  // 只有朋友圈数据进来，才切到双源说法。
+  const wxRecords = all.filter(isWxRecord);
+  const qqRecords = all.filter((r) => !isWxRecord(r));
+  const hasWx = wxRecords.length > 0;
   // 条数要说清楚「有正文多少」和「只有痕迹多少」，别只报一个有正文的口径。
   const traceNote = traces.length ? `，另有 ${traces.length} 条已删除、正文未恢复` : '';
-  lines.push(`[跨度] ${from} → ${to}，共 ${all.length} 条说说（有正文 ${posts.length} 条${traceNote}）`);
+  if (hasWx) {
+    lines.push(
+      `[跨度] ${from} → ${to}，共 ${all.length} 条动态（QQ 空间 ${qqRecords.length} 条，微信朋友圈 ${wxRecords.length} 条；其中有正文 ${posts.length} 条${traceNote}）`,
+    );
+  } else {
+    lines.push(`[跨度] ${from} → ${to}，共 ${all.length} 条说说（有正文 ${posts.length} 条${traceNote}）`);
+  }
   lines.push(`[年份分布] ${[...yearCount.entries()].sort().map(([y, n]) => `${y} 年 ${n} 条`).join('、')}`);
   if (peak) lines.push(`[最活跃的时期] ${peak[0]} 年，共 ${peak[1]} 条`);
   if (topLocations.length) {
@@ -798,6 +974,8 @@ export function buildProfile(records, summaries = []) {
   if (commentTotal) interactionParts.push(`${commentTotal} 条评论`);
   if (forwardTotal) interactionParts.push(`${forwardTotal} 次转发`);
   if (interactionParts.length) lines.push(`[互动总量] ${interactionParts.join('、')}`);
+  // 2.0：朋友圈专属维度。纯 QQ 空间数据时这里是空数组，输出与 1.0 逐字节一致。
+  lines.push(...buildWxDimensions(wxRecords, qqRecords));
   if (topPost) {
     lines.push(`[最受欢迎的一条] ${truncate(topPost.content, 40)}（${topPost.like_count} 赞）`);
   }
@@ -918,13 +1096,21 @@ export function buildYearSummaries(records) {
     }
     const topLocations = [...locationCount.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5);
     const topPeople = [...personCount.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5);
-    const title = key === '时间未知' ? '发布时间未知的一组说说' : `${key} 年`;
+    const groupWx = group.filter(isWxRecord).length;
+    const groupQq = group.length - groupWx;
+    // 2.0：这一组里混了朋友圈时说「动态」并拆来源；纯 QQ 空间时保持 1.0 原话。
+    const title = key === '时间未知'
+      ? (groupWx ? '发布时间未知的一组动态' : '发布时间未知的一组说说')
+      : `${key} 年`;
+    const countText = groupWx
+      ? `共留下 ${group.length} 条动态（QQ 空间 ${groupQq} 条，微信朋友圈 ${groupWx} 条）`
+      : `共留下 ${group.length} 条说说`;
 
     const interactionParts = [];
     if (totalLikes) interactionParts.push(`${totalLikes} 个赞`);
     if (totalComments) interactionParts.push(`${totalComments} 条评论`);
     if (totalForwards) interactionParts.push(`${totalForwards} 次转发`);
-    let body = `${title}共留下 ${group.length} 条说说`
+    let body = `${title}${countText}`
       + (interactionParts.length ? `，累计 ${interactionParts.join('、')}。` : '。');
     if (keywords.length) {
       body += `反复出现的话题关键词：${keywords.join('、')}。`;

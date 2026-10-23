@@ -217,6 +217,25 @@
         line-height: 1.6;
       }
       .banner strong { color: var(--mcode-warning); }
+      .path {
+        margin: 6px 0 0;
+        padding: 8px 10px;
+        border: 1px solid var(--mcode-border);
+        border-radius: 8px;
+        background: var(--mcode-surface-muted);
+        font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 12px;
+        line-height: 18px;
+        color: var(--mcode-text-muted);
+        word-break: break-all;
+      }
+      code {
+        font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 12px;
+        padding: 1px 4px;
+        border-radius: 4px;
+        background: var(--mcode-bg-secondary);
+      }
 
       @media (max-width: 768px) {
         .page { padding: 16px; }
@@ -317,8 +336,41 @@
             <div class="stat-label">知识块</div>
             <div class="stat-value" id="stat-chunks">0</div>
           </div>
+          <div class="stat" id="stat-wx-card" hidden>
+            <div class="stat-label">朋友圈</div>
+            <div class="stat-value" id="stat-wx">0</div>
+          </div>
         </div>
         <p class="note" id="recovery-note" hidden></p>
+      </section>
+
+      <section class="panel" aria-labelledby="wx-title">
+        <div class="panel-head">
+          <h2 id="wx-title">微信朋友圈</h2>
+          <span class="panel-note" id="wx-state">未导入</span>
+        </div>
+        <p class="hint">
+          可选数据源，默认关。导入你自己发的朋友圈后，人物画像会多出朋友圈专属的维度——
+          发圈节奏、常去的地方、配图习惯、互动的人——还能对比你在两个平台说话方式的差别。
+          好友发的不会进库；图片视频只存链接与描述，不下载。
+        </p>
+        <p class="hint">
+          用外部解密工具导出 <code>wechat_sns.json</code>，放到下面这个目录，然后点「导入」：
+        </p>
+        <p class="path" id="wx-dir"></p>
+        <div class="row" style="margin-top: 12px">
+          <div class="field" style="flex: 1; min-width: 260px">
+            <label for="wx-path">文件路径（留空＝自动查找常见位置）</label>
+            <input id="wx-path" type="text" autocomplete="off" placeholder="留空则自动查找桌面、下载、文档目录" />
+          </div>
+        </div>
+        <div class="row" style="margin-top: 12px">
+          <button id="btn-wx-import" type="button">导入朋友圈数据</button>
+          <button id="btn-wx-toggle" type="button" disabled>启用朋友圈</button>
+          <button id="btn-wx-clear" class="danger" type="button" disabled>清空朋友圈数据</button>
+          <span class="panel-note" id="wx-message"></span>
+        </div>
+        <p class="note" id="wx-note" hidden></p>
       </section>
 
       <section class="panel" aria-labelledby="profile-title">
@@ -404,6 +456,16 @@
           sessionText: document.getElementById('session-text'),
           sessionHint: document.getElementById('session-hint'),
           staleNote: document.getElementById('stale-note'),
+          statWxCard: document.getElementById('stat-wx-card'),
+          statWx: document.getElementById('stat-wx'),
+          wxState: document.getElementById('wx-state'),
+          wxDir: document.getElementById('wx-dir'),
+          wxPath: document.getElementById('wx-path'),
+          wxMessage: document.getElementById('wx-message'),
+          wxNote: document.getElementById('wx-note'),
+          btnWxImport: document.getElementById('btn-wx-import'),
+          btnWxToggle: document.getElementById('btn-wx-toggle'),
+          btnWxClear: document.getElementById('btn-wx-clear'),
         };
 
         var PHASE_TEXT = {
@@ -415,6 +477,7 @@
         };
 
         var lastLogLength = -1;
+        var latestState = null;
 
         function api(path, options) {
           return fetch(path, Object.assign({ headers: { 'content-type': 'application/json' } }, options))
@@ -473,7 +536,38 @@
           el.sessionHint.textContent = hint;
         }
 
+        /**
+         * 微信朋友圈面板（2.0）。
+         *
+         * 这一块默认是关的，所以面板要把三件事说清楚：
+         * 现在是什么状态、数据放在哪、导入/启用的下一步该点什么。
+         * 让人自己猜路径、自己找按钮，是这个功能最容易劝退的地方。
+         */
+        function renderWx(wx) {
+          var imported = Boolean(wx.imported);
+          el.btnWxToggle.disabled = !imported;
+          el.btnWxClear.disabled = !imported;
+          el.btnWxToggle.textContent = wx.enabled ? '停用朋友圈' : '启用朋友圈';
+          el.wxDir.textContent = wx.targetDir || '';
+
+          if (!imported) {
+            el.wxState.textContent = '未导入';
+            el.wxNote.hidden = true;
+            return;
+          }
+          el.wxState.textContent = wx.enabled
+            ? '已启用 · ' + wx.count + ' 条'
+            : '已导入 ' + wx.count + ' 条（未启用）';
+          if (wx.enabled) {
+            el.wxNote.hidden = false;
+            el.wxNote.textContent = '朋友圈已计入知识库。导入或启停后要点「重新构建知识库」才会生效。';
+          } else {
+            el.wxNote.hidden = true;
+          }
+        }
+
         function renderState(state) {
+          latestState = state;
           /**
            * 顶部状态栏显示的是「现在能做什么」，不是「上一次操作停在哪一步」。
            *
@@ -499,8 +593,10 @@
 
           el.btnExport.disabled = Boolean(state.exporting);
           el.btnStop.hidden = !state.exporting;
+          // 只有朋友圈数据时也要能建库——不然这个功能就成了摆设。
+          var hasWx = Boolean(state.wx && state.wx.imported);
           el.btnBuild.disabled = Boolean(state.exporting) || state.phase === 'building'
-            || !(state.hasMessages || state.hasArchive);
+            || !(state.hasMessages || state.hasArchive || hasWx);
           el.btnBuild.textContent = state.kbReady ? '重新构建知识库' : '构建知识库';
 
           setStep('export', state.exporting ? 'active' : state.hasMessages ? 'done' : 'idle');
@@ -569,6 +665,12 @@
           if (state.ownerUin && document.activeElement !== el.uin) el.uin.value = state.ownerUin;
           if (state.persona && document.activeElement !== el.persona) el.persona.value = state.persona;
           el.demoBanner.hidden = !state.isDemo;
+
+          renderWx(state.wx || {});
+
+          var wxCount = stats.wx ? Number(stats.wx.count || 0) : 0;
+          el.statWxCard.hidden = !wxCount;
+          el.statWx.textContent = wxCount;
         }
 
         function poll() {
@@ -668,6 +770,43 @@
               el.status.textContent = result.message || '构建失败';
               el.status.setAttribute('data-tone', 'error');
             }
+          });
+        });
+
+        el.btnWxImport.addEventListener('click', function () {
+          el.wxMessage.textContent = '正在查找导出的 JSON…';
+          var path = el.wxPath.value.trim();
+          post('/api/wx/import', path ? { path: path } : {}).then(function (result) {
+            if (result && result.ok) {
+              el.wxMessage.textContent = '已导入 ' + result.count + ' 条'
+                + '（另有 ' + result.notMine + ' 条不是本人发的，已忽略）';
+            } else {
+              el.wxMessage.textContent = (result && result.message) || '导入失败';
+            }
+            poll();
+          });
+        });
+
+        el.btnWxToggle.addEventListener('click', function () {
+          var enabled = Boolean(latestState && latestState.wx && latestState.wx.enabled);
+          post('/api/wx/switch', { enabled: !enabled }).then(function (result) {
+            if (result && result.ok) {
+              el.wxMessage.textContent = result.enabled
+                ? '已启用，点「重新构建知识库」生效'
+                : '已停用，点「重新构建知识库」生效';
+            } else {
+              el.wxMessage.textContent = (result && result.message) || '操作失败';
+            }
+            poll();
+          });
+        });
+
+        el.btnWxClear.addEventListener('click', function () {
+          post('/api/wx/clear', {}).then(function (result) {
+            el.wxMessage.textContent = result && result.ok
+              ? '已清空，点「重新构建知识库」生效'
+              : '清空失败';
+            poll();
           });
         });
 

@@ -99,6 +99,28 @@ ditto /Applications/WeChat.app.orig /Applications/WeChat.app
 | `xattr -d com.apple.macl` | 对自己的副本可以删（删不删都能重签） |
 | 普通用户能否在 `/Applications` 写 | 能：mkdir ✅、rename ✅（所以路线 B 的前提成立） |
 
+### 新突破：`mv` 受保护的已安装 app **不被拦**（路线 A 升为一键脚本）
+
+上一节说「路线 B 的 `mv` 可能被 App 管理拦」——用 `Veee.app`（未在运行、带 `com.apple.macl`）
+做了对照实验，结果**可以 mv**（mv 完立刻还原，CDHash / macl 无变化、无残留）。
+
+| 操作 | 结果 |
+|---|---|
+| `sudo chgrp` 改已安装 app 的元数据 | ❌ 被 App 管理拦（`Operation not permitted`） |
+| `mv` 移动已安装的受保护 app | ✅ **不被拦** |
+
+所以真正的分界是「**改**已安装 app」被拦，「**移动**」不拦。而 `/Applications` 对 admin 组可写，
+普通用户就能把 app 换成自己的副本——**不用 sudo、不用改系统设置**。
+
+新增两个脚本：
+
+| 脚本 | 作用 |
+|---|---|
+| `tools/wx-prepare-copy.sh` | 一键准备：验微信已退出 → `mv` 原版到 `.orig` → `ditto` 复制回来 → 校验签名与可写性。带前置守卫（微信在跑就拒绝执行） |
+| `tools/wx-restore-copy.sh` | 一键还原：把原版换回去，副本挪到 `.replaced` 待确认 |
+
+指引 §3.4 两条路线**对调**：换副本升为首选（路线 A），改权限降为备选（路线 B，需要 App 管理授权）。
+
 ### 指引相应改写
 
 - 新增 **§2.4 App 管理**：报 `Operation not permitted`（不是 "Permission denied"）就是这个，

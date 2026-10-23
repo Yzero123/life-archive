@@ -8,7 +8,7 @@
 这是一个 [Mini App](https://agent.minimax.cn/docs/miniapp/overview) 包，
 可以在 MiniMax Code（MCode）里直接安装使用。
 
-> 当前版本 **v2.0.1**。
+> 当前版本 **v2.0.2**。
 > 完整版本历史见 [`CHANGELOG.md`](CHANGELOG.md)；
 > 想回退到任意旧版，见 [版本历史与回退](#版本历史与回退)。
 
@@ -20,7 +20,7 @@
 
 **方式一：直接导入 zip**（推荐给不想折腾 git 的人）
 
-下载 [`releases/qq-space-kb-2.0.1.zip`](releases/qq-space-kb-2.0.1.zip)，
+下载 [`releases/qq-space-kb-2.0.2.zip`](releases/qq-space-kb-2.0.2.zip)，
 在 MCode 里安装 Mini App 时选择这个包。
 
 > 想要旧版？[Releases 页面](https://github.com/Yzero123/qq-space-kb/releases)有全部历史版本的 zip。
@@ -135,6 +135,7 @@ git clone https://github.com/Yzero123/qq-space-kb.git
 
 | 版本 | 日期 | 一句话 | 安装包 |
 |---|---|---|---|
+| v2.0.2 | 2026-10-23 | 归一化器支持 WeChatDataAnalysis 的导出形状 | [zip](releases/qq-space-kb-2.0.2.zip) |
 | v2.0.1 | 2026-10-23 | 文档事实修正：SIP 只挡 SIWX，不挡 WeChatDataAnalysis | [zip](releases/qq-space-kb-2.0.1.zip) |
 | v2.0.0 | 2026-10-23 | 微信朋友圈历史接入：双源画像，朋友圈数据源默认关 | [zip](releases/qq-space-kb-2.0.0.zip) |
 | v1.7.1 | 2026-10-23 | 版本管理：CHANGELOG + 隐私回扫脚本 + 修文档示例泄漏 | [zip](releases/qq-space-kb-1.7.1.zip) |
@@ -209,7 +210,7 @@ qq-kb-pipeline/                   # 早期 Python 参考实现（合并/切块/�
 QQ空间说说知识库方案.md           # 选型调研 + 关键工程点复盘
 微信朋友圈接入方案-2.0.md         # 2.0 方案：调研 / 实测 / 路线 / 「不影响 1.0」验收清单
 微信朋友圈数据契约-2.0.md         # 2.0 数据契约：朋友圈导出 JSON 的唯一格式
-releases/qq-space-kb-*.zip        # 各历史版本的安装包（1.3.0 ~ 2.0.1，全部可直接导入）
+releases/qq-space-kb-*.zip        # 各历史版本的安装包（1.3.0 ~ 2.0.2，全部可直接导入）
 ```
 
 Node 侧只用内置模块，**没有 npm 运行时依赖**；页面不加载任何远程资源。
@@ -272,7 +273,7 @@ node tests/privacy-scan.mjs
 ```bash
 cd qq-space-kb
 node tests/test.mjs              # 121 项断言
-node tests/test-wx.mjs           # 56 项断言（2.0）：1.0 逐字节回归锁 / 解析 / 双源画像 / 端到端
+node tests/test-wx.mjs           # 62 项断言（2.0）：1.0 逐字节回归锁 / 解析 / 双源画像 / 端到端
 node tests/export-session.mjs    # 48 项断言：一次扫码（会话管理器 / 编排器 / 接线 / 页面）
 node tests/mcp-smoke.mjs         # MCP 服务器冒烟：真启动、真发 JSON-RPC、真调五个工具
 node tests/visualizer-static.mjs # 可视化样例静态审查：信封、主题 token、安全、载荷

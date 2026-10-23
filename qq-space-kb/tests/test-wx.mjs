@@ -328,6 +328,123 @@ check('没有 owner 时一条都不入库（宁可没有也不放错人）', () 
   assert.equal(result.stats.notMine, 1);
 });
 
+// WeChatDataAnalysis 的导出形状：account 在顶层、卡片字段摊在 post 上、缩略图叫 thumbUrl。
+// 这不是假设——是照着它的 sns_export_service.py 的实际输出写的。
+const WDA_PAYLOAD = {
+  exportedAt: '2026-10-23 12:00:00',
+  exportId: 'demo-export',
+  account: `${WX_OWNER}_4160`,
+  scope: 'all',
+  format: 'json',
+  username: WX_OWNER,
+  displayName: '演示本人',
+  postCount: 3,
+  posts: [
+    {
+      id: '8100000000000000001',
+      tid: '8100000000000000001',
+      username: WX_OWNER,
+      displayName: '演示本人',
+      createTime: ts('2019-05-04T20:11:00Z'),
+      contentDesc: '在旧书店翻到一本绝版诗集，扉页上有人写着赠言。',
+      location: '演示市旧城区书店',
+      sourceName: '',
+      media: [{
+        type: 2,
+        url: 'https://mmbiz.qpic.cn/demo/w1',
+        thumbUrl: 'https://mmbiz.qpic.cn/demo/w1_t',
+        md5: 'demow1',
+        width: 1080,
+        height: 1440,
+      }],
+      likes: [{ username: 'wxid_demo8888', nickname: '演示同学甲' }],
+      comments: [{ username: 'wxid_demo7777', nickname: '演示同学乙', content: '这本书现在还有吗' }],
+      type: 2,
+      title: '',
+      contentUrl: '',
+      finderFeed: {},
+      finderLive: {},
+      official: {},
+    },
+    {
+      id: '8100000000000000002',
+      tid: '8100000000000000002',
+      username: WX_OWNER,
+      displayName: '演示本人',
+      createTime: ts('2020-08-09T21:00:00Z'),
+      contentDesc: '',
+      location: '',
+      sourceName: '',
+      media: [],
+      likes: [],
+      comments: [],
+      type: 28,
+      title: '',
+      contentUrl: '',
+      finderFeed: {
+        nickname: '演示视频号',
+        description: '一条关于旧书店的短视频',
+        thumbUrl: 'https://mmbiz.qpic.cn/demo/w2_t',
+        videoPlayDuration: 42,
+      },
+      finderLive: {},
+      official: {},
+    },
+    {
+      id: '8100000000000000003',
+      tid: '8100000000000000003',
+      username: WX_OWNER,
+      displayName: '演示本人',
+      createTime: ts('2021-02-18T11:02:00Z'),
+      contentDesc: '整理了街区尺度的变化',
+      location: '',
+      sourceName: '',
+      media: [],
+      likes: [],
+      comments: [],
+      type: 3,
+      title: '一份旧城改造资料',
+      contentUrl: 'https://example.com/demo/w3',
+      finderFeed: {},
+      finderLive: {},
+      official: { username: 'demo-gzh' },
+    },
+  ],
+};
+
+const wda = parseWechatSns(WDA_PAYLOAD, {});
+
+check('WeChatDataAnalysis 形状能解析（account 在顶层）', () => {
+  assert.equal(wda.stats.total, 3);
+  assert.equal(wda.stats.kept, 3);
+  assert.equal(wda.stats.owner, WX_OWNER);
+});
+check('WeChatDataAnalysis 形状：createTime / contentDesc / 字符串 location 都认', () => {
+  const first = wda.records[0];
+  assert.equal(first.published_at, ts('2019-05-04T20:11:00Z'));
+  assert.ok(first.content.includes('绝版诗集'));
+  assert.equal(first.location, '演示市旧城区书店');
+});
+check('WeChatDataAnalysis 形状：thumbUrl 被认成缩略图', () => {
+  assert.equal(wda.records[0].images[0].thumb, 'https://mmbiz.qpic.cn/demo/w1_t');
+});
+check('WeChatDataAnalysis 形状：赞与评论昵称正确', () => {
+  assert.equal(wda.records[0].like_users[0].nick, '演示同学甲');
+  assert.equal(wda.records[0].comments[0].nick, '演示同学乙');
+  assert.equal(wda.records[0].comments[0].content, '这本书现在还有吗');
+});
+check('WeChatDataAnalysis 形状：视频号卡片（扁平）被合成为正文', () => {
+  const finder = wda.records.find((r) => r.content.includes('短视频'));
+  assert.ok(finder);
+  assert.ok(finder.content.includes('演示视频号'));
+});
+check('WeChatDataAnalysis 形状：链接卡片（扁平）标题与链接进正文', () => {
+  const link = wda.records.find((r) => r.content.includes('旧城改造资料'));
+  assert.ok(link);
+  assert.ok(link.content.includes('整理了街区尺度'));
+  assert.equal(link.post_url, 'https://example.com/demo/w3');
+});
+
 // ---------------------------------------------------------------------------
 // [3] 双源入库与画像
 // ---------------------------------------------------------------------------

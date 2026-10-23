@@ -82,9 +82,36 @@ ditto /Applications/WeChat.app.orig /Applications/WeChat.app
 > 脚本里**不硬编码任何真实内容**：QQ 空间那一侧的检索关键词是运行时从知识库里取的，
 > 朋友圈那一侧用的是合成数据里的词。脚本本身在公开仓库里，不能带真实内容。
 
+### 修的坑：`sudo chgrp` 报 `Operation not permitted`
+
+令酱实测执行 §3.4 路线 A 时踩到的。**不是 POSIX 权限问题**（sudo 已经拿到 root），
+是 macOS 的 **App 管理（TCC）**在拦——它保护已安装的 app 不被随意改动，连 root 也不放行。
+
+本机实测定位到的几件事：
+
+| 事实 | 结论 |
+|---|---|
+| 微信 app 带 `com.apple.macl` 标记 | Apple 的 app 完整性标记 |
+| 该标记**不是** codesign 的拦路虎 | 同一 app 的副本放在 `/Applications` 下，带标记也能 `codesign --force --sign -` 重签成功 |
+| 拦的是「改动已安装 app 本身」 | 副本是新路径、不在已安装 app 记录里 → 放行 |
+| 副本属主 | `lingjiang:admin drwxr-xr-x` → `os.access(W_OK)` 为真 → 工具的权限门直接过 |
+| `ditto` 复制行为 | 复制**整个 bundle** 会保留 `com.apple.macl`；复制单个文件不保留 |
+| `xattr -d com.apple.macl` | 对自己的副本可以删（删不删都能重签） |
+| 普通用户能否在 `/Applications` 写 | 能：mkdir ✅、rename ✅（所以路线 B 的前提成立） |
+
+### 指引相应改写
+
+- 新增 **§2.4 App 管理**：报 `Operation not permitted`（不是 "Permission denied"）就是这个，
+  解法是系统设置 → 隐私与安全性 → **App 管理** → 加上你的终端 → 打开 → 重开终端。
+- §3.4 路线 A 补上「报 EPERM 先去开 App 管理」。
+- §3.4 路线 B 补上实测结论，并标出**唯一未验证的一步**：`mv` 一个已安装的受保护 app
+  可能被 App 管理拦——先单独试这一步，失败就改走路线 A + §2.4。
+- `tools/wx-path-check.py` 的结论段加上错误信息判别。
+
 ### 同时改了
 
-`tools/wx-path-check.py` 的结论段改成给出**两条路**（A 改权限 / B 换副本），并写清各自的前置与回退。
+`tools/wx-path-check.py` 的结论段改成给出**两条路**（A 改权限 / B 换副本），并写清各自的前置与回退，
+外加错误信息判别（`Operation not permitted` 与 `Permission denied` 不是一回事）。
 
 ### 还替你预置了 LLDB 后端偏好
 

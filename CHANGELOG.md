@@ -28,7 +28,84 @@ git revert <commit-sha>      # 逐个撤销
 
 ---
 
-## 未发布 — 取数指引补一条「不用 sudo」的备选路径
+## 未发布 — 抓密钥路线改判：工具的「原地重签」在本机物理不可行，改走一次性副本
+
+上一节那条「换副本过权限门」的路子**只能解开工具自己的权限检查，解不开系统那层拒绝**。
+本轮把根因彻底定位，并换成工具自带的另一条路线。
+
+### 根因：amfid 拒绝 ad-hoc 签名的受限权限
+
+工具的「实验性本机调试」prepare 阶段会临时重签 `/Applications/WeChat.app`，
+命令是 `codesign --force --preserve-metadata=entitlements --sign -`——
+**保留**腾讯原始权限（`app-sandbox` / `application-groups` / `application-identifier` / `allow-jit`）。
+但 macOS 26.x 起，ad-hoc 签名带受限权限会被 AMFI 直接杀掉。
+
+实测签名矩阵（四个小程序变体，逐个执行）：
+
+| 变体 | 权限 | 结果 |
+|---|---|---|
+| A | 无 | ✅ 正常启动 |
+| B | 仅 `com.apple.security.app-sandbox` | ❌ SIGTRAP（被 AMFI 杀） |
+| C | 工具要求的那套（sandbox + app-groups + application-identifier） | ❌ SIGTRAP |
+| D | 微信真实那套（再加 `allow-jit`） | ❌ SIGTRAP |
+
+系统日志真因：
+
+```
+amfid: The file is adhoc signed but contains restricted entitlements
+       Error Domain=AppleMobileFileIntegrityError Code=-424
+kernel: code signature validation failed fatally
+→ open -n 报 RBSRequestErrorDomain Code=5 "Launch failed" / errno 163
+```
+
+> 关键矛盾：工具的 `_has_compatible_in_place_signature` **硬要求**那几个权限必须保留，
+> 而 macOS 恰好**只允许**没有受限权限的 ad-hoc 签名启动。两者天然冲突，
+> 不是开关、不是权限位、不是 sudo 能解决的。
+
+### 新路线：工具自带的「一次性副本」流程
+
+解包工具后发现它是 PyInstaller 打包的，源码能整个抽出来；里面另有一条
+`macos_clone_capture` 路线：**克隆免权限的一次性微信副本 + 克隆真实容器快照**，
+在副本上抓密钥，**全程不碰官方安装、不碰真实数据**。这条路线只在 Python 内部，没有 API 入口，
+所以新增 `tools/wx-clone-capture.py` 直接驱动工具自己的模块：
+
+```bash
+python3.11 tools/wx-clone-capture.py prepare     # 克隆副本 + 真实容器快照 + 启动一次性微信
+python3.11 tools/wx-clone-capture.py preflight   # 断点预检
+python3.11 tools/wx-clone-capture.py capture     # 布防等待（登录时触发密钥派生）
+python3.11 tools/wx-clone-capture.py cleanup     # 清理副本与快照
+```
+
+脚本处理了三处本机特性：
+
+| 本机特性 | 现象 | 处理 |
+|---|---|---|
+| 微信容器根目录带 `com.apple.macl` | `clonefile(2)` 返回 `EPERM`，工具误判成「没给完全磁盘访问权限」 | 改为逐子项克隆（子项无 macl，仍是写时复制） |
+| 真实数据在 `Documents/xwechat_files`，不在工具预期的 `app_data/xwechat_files` | 工具报「找不到本机数据副本」 | 改用真实目录作克隆源 |
+| 免权限副本不带 `get-task-allow` | LLDB 附加被拒；工具默认还要弹管理员密码框 | 给副本补 `get-task-allow`，并以当前用户跑 lldb，**免掉密码弹窗** |
+
+本机实测（prepare / preflight 均通过）：
+
+| 环节 | 结果 |
+|---|---|
+| prepare | ✅ 副本启动，真实容器快照完成，**21 个数据库盐**全部匹配，`official_wechat_preserved: true` |
+| preflight | ✅ `wechat.dylib` 的 PBKDF 导入桩已验证（`pbkdf_import_verified: true`），`ready_for_monitoring: true` |
+| capture | 布防成功，**无管理员弹窗**，等待登录触发密钥派生 |
+
+### 指引同步改写
+
+`微信朋友圈取数操作指引.md`：§3.0 换成「两条路都走不通、第三条走得通」+ 签名矩阵证据；
+§3.3 标注为留档；**§3.4 换成新的一次性副本路线**；§3.5 卡点表重写；
+§2.3 改为「本次不用开调试附加授权」；§2.4 更正「换副本是唯一走得通的路」的旧结论。
+
+### 旧路线的结论修正
+
+| 旧结论 | 实测修正 |
+|---|---|
+| 门 ① 换副本是唯一走得通的路 | 只解开了**工具自己的**权限检查；系统 AMFI 那一层仍然过不去 |
+| 门 ②「多半不用开」 | 改判：**不用开**——新路线的副本自带 `get-task-allow` |
+
+## 历史留档 — 取数指引补一条「不用 sudo」的备选路径
 
 本机实测了另一条过权限门的办法，写进指引 §3.4。
 

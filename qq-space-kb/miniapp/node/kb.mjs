@@ -84,7 +84,7 @@ export function moodCellIdOwnerUin(cellId) {
 /**
  * 这个 cell_id 有可能是一条「说说」吗？
  *
- * 真正的说说 ID 是 24 位十六进制（如 `2301ca0e2ff5db504d210300`）。
+ * 真正的说说 ID 是 24 位十六进制（如 `b327e6725f60718293a4b5c`）。
  * 我们自己合成的占位 ID（正文没捞回来、但发布时间能从 feed 反解的那些）
  * 带 `history-v2:` / `history-guestbook:` 前缀。
  *

@@ -53,6 +53,30 @@ cp -R qq-space-kb ~/.minimax/plugins/qq-space-kb
 
 ---
 
+## 版本与回退
+
+当前版本 **v1.7.1**。完整历史见 [`CHANGELOG.md`](CHANGELOG.md)。
+
+| 版本 | 一句话 |
+|---|---|
+| v1.7.1 | 版本管理：CHANGELOG + 隐私回扫脚本 + 修文档示例里的真实说说 ID |
+| v1.7.0 | 对话架构：知识库整体当 prompt，事实红线只管硬事实 |
+| v1.6.2 | 留言板留言不再被当成「我发过的说说」 |
+| v1.6.1 | 按钮挪进面板，状态栏按真实状态显示 |
+| v1.6.0 | 全程只扫一次码：常驻浏览器 + CDP 复用登录态 |
+| v1.5.0 | 年份分布可视化技能 |
+| v1.4.0 | 插件化：MCP 工具 + 技能 + 人设子代理 |
+| v1.3.0 | 第一个版本：导出 + 建库 + 画像 + 对话 |
+
+**想回到旧版**：GitHub Releases 页面下载对应版本的 zip 重新安装即可
+（<https://github.com/Yzero123/qq-space-kb/releases>），
+或者 `git checkout v1.6.2` 切源码。
+
+> 回退到 v1.6.x 及更早版本时注意：那些版本的导出指令里写着导出统计的真实数值
+> （发布前已做脱敏修补），其余行为不受影响。
+
+---
+
 ## 怎么用
 
 ### 三步走
@@ -496,7 +520,7 @@ QQ 空间的 `uin` / `p_skey` 是**会话 cookie**——只活在浏览器进程
 
 | cell_id 形态 | 收不收 | 为什么 |
 |---|---|---|
-| 24 位十六进制（如 `2301ca0e…`） | 收 | 真说说 ID |
+| 24 位十六进制（如 `b327e672…`） | 收 | 真说说 ID |
 | `history-v2:` / `history-guestbook:` 开头 | 收 | 我们自己合成的占位 ID（正文没捞回来但发布时间能反解） |
 | `richinfo` 之类的哨兵 | **不收** | 别人在留言板上的留言 |
 | 空 / 其它形态 | **不收** | 不是一条说说 |
@@ -604,19 +628,35 @@ NODE_PATH=<导出工具目录>/node_modules node <包目录>/tools/qzone_feed_re
 `dataDir`（`raw/`、`kb/`、`state.json`），**不在包内**；包内只有代码、文档、
 合成演示数据和自绘图标。
 
-自查过一次，结果如下（用自己真实数据做指纹扫描）：
+自查已经**脚本化**，不再靠手写关键词扫：
 
-| 检查项 | 结果 |
+```bash
+node tests/privacy-scan.mjs
+```
+
+它从本机真实知识库**现算**指纹，再回扫包内每一个文件和 `releases/` 下的每一个 zip。
+脚本里**不写死任何个人信息**，所以它能随包分发——别人也能拿它扫自己的安装。
+本机没有真实知识库时自动跳过（CI 上跑得动）。
+
+查的维度：
+
+| 维度 | 为什么 |
 |---|---|
-| 真实 QQ 号（112 个，各种写法） | 0 残留 |
-| 真实说说 ID（90 个，可反解出 QQ 号） | 0 残留 |
-| 真实长数字（822 个，时间戳 / 赞数等） | 0 残留 |
-| 真实互动昵称（36 个） | 0 残留 |
-| 真实说说正文 / 评论 / 地名的 4 字滑窗（659 个） | 0 残留 |
-| 同上，5 字滑窗（499 个） | 0 残留 |
-| 完整句子（≥6 字，152 句） | 0 残留（唯一命中是 `http://www` 这个 URL 通用前缀） |
-| 本机绝对路径、用户名、宿主数据目录路径 | 0 残留 |
-| `raw/` `kb/` `state.json` 等数据文件 | 未打进包 |
+| 十进制 QQ 号 + 大小端 hex 编码 | 同一号码的不同写法 |
+| 完整 cell_id | 说说 ID 本身就是身份 |
+| **8 位 owner 前缀** | 说说 ID 前 8 位 hex 就是空间主人 QQ 号的小端编码——**只照抄这一段也等于泄漏号码** |
+| 16 位前缀 | owner + 精确时间戳 |
+| 说说链接、昵称、地点 | 直接标识 |
+| 正文的 4 字中文滑窗 | 真实内容 |
+| 聚合数字（赞数、时间戳） | **只提示不拦**——不是身份信息，且极易与代码常量撞车 |
+
+> **踩过的坑（v1.7.1 修掉）**：v1.3.0 ~ v1.6.2 的文档注释里写着一条**真实说说 ID** 当示例。
+> 当时的扫描用的是「带上下文」的关键词（`mood/<前缀>`），
+> 而包里的裸 ID 没有 `mood/` 前缀——**整个漏掉了**。
+> 教训：扫隐私必须用**裸标识符**，不能用带上下文的模式。
+> 现在改掉了，示例换成合成的 `b327e672…`。
+
+其它约定：
 
 > 写测试时**不要用真实账号的 cell_id、说说正文、好友昵称**——
 > 哪怕只是一个 cell_id，也能反解出你的 QQ 号。
@@ -640,12 +680,26 @@ NODE_PATH=<导出工具目录>/node_modules node <包目录>/tools/qzone_feed_re
 ## 开发者
 
 ```bash
-node tests/test.mjs           # 103 项断言
-node tests/export-session.mjs  # 43 项断言：一次扫码（会话管理器 / 编排器 / 接线 / 页面）
+node tests/test.mjs           # 121 项断言
+node tests/export-session.mjs  # 48 项断言：一次扫码（会话管理器 / 编排器 / 接线 / 页面）
 node tests/mcp-smoke.mjs      # MCP 服务器冒烟：真启动、真发 JSON-RPC、真调五个工具
 node tests/visualizer-static.mjs  # 可视化样例的静态审查：信封、主题 token、安全、载荷
 node tests/plugin-package.mjs # 插件包结构校验：清单、路径、包体积、frontmatter、凭证
+node tests/privacy-scan.mjs   # 隐私回扫：拿本机真实知识库现算指纹，回扫包内文件与发布 zip
 ```
+
+> `tests/export-session.mjs` 里有一组用例会真的拉起系统 Chrome，验证
+> 「脚本退出后浏览器还活着」「重复 start 复用同一个窗口」「登录等待超时后浏览器仍在」。
+> 跑它需要本机有系统 Chrome 和 playwright（在导出工具的 `node_modules` 里）；
+> 没有就自动跳过那几项，其余断言照跑。
+
+> `tests/privacy-scan.mjs` 会去找本机真实知识库
+> （`~/.minimax/v2/plugin-data/liveboards/*/kb/unified.jsonl`），
+> 从里面**现算**指纹（QQ 号的十进制与各种 hex 编码、完整 cell_id、
+> **8 位 owner 前缀**、16 位前缀、说说链接、昵称、正文 4 字滑窗），
+> 再回扫包内每一个文件和 `releases/` 下的每一个 zip。
+> 脚本里**不写死任何个人信息**，所以它能随包分发——别的用户也能拿它扫自己的安装。
+> 本机没有真实知识库时自动跳过，CI 上跑得动。
 
 > `tests/export-session.mjs` 里有一组用例会真的拉起系统 Chrome，验证
 > 「脚本退出后浏览器还活着」「重复 start 复用同一个窗口」「登录等待超时后浏览器仍在」。
@@ -677,6 +731,7 @@ miniapps/qq-space-kb/
 ├── .minimax-plugin/plugin.json    插件清单
 ├── package.json                   mcode.miniApp 声明入口
 ├── icon.png
+├── CHANGELOG.md                   版本历史：改了什么、为什么、怎么回退
 ├── servers.mcp.json               MCP 服务声明（stdio，零依赖）
 ├── tools/
 │   ├── qzone_session.js             常驻浏览器会话管理器（一次扫码的关键）
@@ -706,6 +761,7 @@ miniapps/qq-space-kb/
     ├── mcp-smoke.mjs              MCP 服务器冒烟测试
     ├── visualizer-static.mjs      可视化样例静态审查
     ├── plugin-package.mjs         插件包结构校验
+    ├── privacy-scan.mjs           隐私回扫：真实数据现算指纹，回扫包内文件与发布 zip
     └── fixtures/seed-demo.mjs     演示数据种子
 ```
 

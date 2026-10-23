@@ -34,8 +34,8 @@ codesign --verify --deep --strict "$APP" && echo "✅ 深度校验通过" || ech
 
 echo
 echo "=== 3/3 收尾 ==="
-echo "旧的副本留在 $OLD，确认微信能正常启动后可以删掉："
-echo "  rm -rf $OLD"
+echo "旧的副本留在 ${OLD}，确认微信能正常启动后可以删掉："
+echo "  rm -rf ${OLD}"
 echo
 echo "提示：微信属主应已恢复为 root。若不是，跑："
-echo "  sudo chown -R root:wheel $APP"
+echo "  sudo chown -R root:wheel ${APP}"

@@ -189,13 +189,22 @@ function buildFingerprints(records) {
     qqAll.add(le.toString('hex').toUpperCase());
   }
 
-  // 文本滑窗：4 字**中文**片段，命中即代表真实内容。
+  // 文本滑窗：**6 字中文**片段，命中即代表真实内容。
   // 只取中文——否则 URL 里的 "http"、"qzon" 之类会切出一堆假阳性。
+  //
+  // 为什么是 6 而不是 4：4 字中文窗口在语料一大就会和通用汉语撞车。
+  // 2026-10-23 导入了朋友圈正文后，真实语料里出现了「什么样的」「实在不行」
+  // 这类**到处都有的普通短语**，4 字窗口把文档里同名的普通表达全判成泄漏——
+  // 那是误报，不是泄漏。6 字窗口仍能命中任何成句的真实内容，
+  // 而通用短语不再误伤。
+  const WINDOW_SIZE = 6;
   const windows = new Set();
   for (const text of texts) {
     const runs = text.match(/[\u4e00-\u9fff\u3400-\u4dbf]{4,}/g) ?? [];
     for (const run of runs) {
-      for (let i = 0; i + 4 <= run.length; i += 1) windows.add(run.slice(i, i + 4));
+      for (let i = 0; i + WINDOW_SIZE <= run.length; i += 1) {
+        windows.add(run.slice(i, i + WINDOW_SIZE));
+      }
     }
   }
 
@@ -235,10 +244,17 @@ function buildWxFingerprints(payload) {
   const addWxid = (value) => {
     const text = String(value ?? '').trim();
     if (!text) return;
+    // 退化值不是标识符：外部工具偶尔把字段名当成值写出来（例如字面量 "wxid"），
+    // 或者写空。把它当指纹会把文档里所有正常的 "wxid" 字样全判成泄漏。
+    if (text.length < 6) return;
+    if (!/[0-9_]/.test(text)) return;
     wxids.add(text);
-    // 目录名常带设备后缀（wxid_xxx_4160），基名也要单独收
+    // 目录名常带设备后缀（wxid_xxx_4160），基名也要单独收。
+    // 但要防一手：像 wxid_<一串数字> 这种「整串都是数字」的账号，
+    // 去掉尾缀后只剩 "wxid" 这个字段名——那不是标识符，
+    // 收进去会把文档里所有正常的 "wxid" 字样全判成泄漏。
     const base = text.replace(/_\d+$/, '');
-    if (base && base !== text) wxids.add(base);
+    if (base && base !== text && base.length >= 6 && /[0-9_]/.test(base)) wxids.add(base);
   };
 
   const meta = payload?.meta ?? {};

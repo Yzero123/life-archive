@@ -23,6 +23,7 @@ macOS 上物理不可行：
     python3 tools/wx-clone-capture.py prepare     # 克隆副本 + 启动一次性微信
     python3 tools/wx-clone-capture.py preflight   # 预检断点（需先 prepare）
     python3 tools/wx-clone-capture.py capture     # 抓密钥（需先 preflight）
+    python3 tools/wx-clone-capture.py register    # 把密钥登记进工具的密钥库（capture 之后必做）
     python3 tools/wx-clone-capture.py cleanup     # 清理副本与快照
 
 脚本不硬编码任何账号、wxid 或路径，全部运行时从系统里推导。
@@ -44,6 +45,8 @@ EXTRACT_ROOT = Path.home() / "Library/Caches/WeChatDataAnalysis/wcda-py-src"
 DEBUG_ROOT = Path.home() / "Library/Caches/WeChatDataAnalysis/wechat-debug"
 CONTAINER_RELATIVE = Path("Library/Containers/com.tencent.xinWeChat")
 DEBUG_COPY_NAME = "WeChat Debug - WCDA.app"
+
+TOOL_OUTPUT_DIR = Path.home() / "Library/Application Support/wechat-data-analysis-desktop/output"
 
 GET_TASK_ALLOW_PLIST = """<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -313,6 +316,50 @@ def step_capture(clone, dbkey) -> int:
     return 0
 
 
+def step_register(clone, dbkey) -> int:
+    """把抓到的 passphrase 登记进工具自己的密钥库。
+
+    工具读库用的是 ``<outputDir>/account_keys.json``（不是 ``~/.wcdb-key-tool/`` 那个文件），
+    抓到的密钥必须登记进去，工具才会用它解密数据库。
+    登记时保留原有的图片密钥，只补数据库密钥和来源路径。
+    """
+    import os as _os
+
+    passphrase_file = Path.home() / ".wcdb-key-tool/wechat-passphrase.json"
+    if not passphrase_file.is_file():
+        raise SystemExit(f"还没抓到密钥：{passphrase_file} 不存在，先跑 capture")
+    import json as _json
+    passphrase = _json.loads(passphrase_file.read_text(encoding="utf-8"))["passphrase"]
+
+    _os.environ["WECHAT_TOOL_OUTPUT_DIR"] = str(TOOL_OUTPUT_DIR)
+    store_path = TOOL_OUTPUT_DIR / "account_keys.json"
+    if not store_path.is_file():
+        raise SystemExit(f"找不到工具的密钥库：{store_path}")
+    store = _json.loads(store_path.read_text(encoding="utf-8"))
+    wxid_dir = ""
+    for item in store.values():
+        wxid_dir = item.get("image_key_source_wxid_dir") or wxid_dir
+    if not wxid_dir:
+        raise SystemExit("密钥库里没有账号目录信息，先让工具跑一次账号检测")
+    db_storage = str(Path(wxid_dir) / "db_storage")
+    from datetime import datetime
+    now = datetime.now().isoformat(timespec="seconds")
+    for item in store.values():
+        item["db_key"] = passphrase
+        item["db_key_source_wxid_dir"] = wxid_dir
+        item["db_key_source_db_storage_path"] = db_storage
+        item["updated_at"] = now
+    temp_path = store_path.with_suffix(".tmp")
+    temp_path.write_text(_json.dumps(store, indent=2, ensure_ascii=False), encoding="utf-8")
+    _os.chmod(temp_path, 0o600)
+    temp_path.replace(store_path)
+    _os.chmod(store_path, 0o600)
+    print(f"已登记 {len(store)} 个账号别名 → {store_path}")
+    print(f"数据库密钥长度：{len(passphrase)} hex")
+    print(f"来源目录：{db_storage}")
+    return 0
+
+
 def step_cleanup(clone, dbkey) -> int:
     result = clone.cleanup_clone_capture(
         "/Applications/WeChat.app",
@@ -328,6 +375,7 @@ STEPS = {
     "prepare": step_prepare,
     "preflight": step_preflight,
     "capture": step_capture,
+    "register": step_register,
     "cleanup": step_cleanup,
 }
 

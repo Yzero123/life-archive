@@ -135,6 +135,7 @@ git clone https://github.com/Yzero123/qq-space-kb.git
 | 脚本 | 作用 |
 |---|---|
 | `tools/wx-clone-capture.py` | **推荐路线**：用工具自带的一次性副本流程抓密钥，**不动官方安装、不用 sudo、不改系统设置** |
+| `tools/wx-import-moments.mjs` | 无头入库：把导出的 JSON 走真实路由送进插件并打印验收结果 |
 | `tools/wx-path-check.py` | 只读预判：检查签名 / 写权限 / 调试授权，给出「点获取会不会失败」的结论 |
 | `tools/wx-prepare-copy.sh` | 把 `/Applications/WeChat.app` 换成自己的副本（旧过权限门办法，已被 AMFI 拒绝推翻，留档） |
 | `tools/wx-restore-copy.sh` | 一键还原上面的副本 |

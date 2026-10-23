@@ -36,7 +36,7 @@ if [ -e "$ORIG" ]; then
   exit 1
 fi
 if [ ! -d "$APP" ]; then
-  echo "找不到 $APP，微信是不是装在别的位置？"
+  echo "找不到 ${APP}，微信是不是装在别的位置？"
   exit 1
 fi
 echo "✅ 前置状态正常"

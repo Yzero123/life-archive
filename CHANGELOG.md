@@ -92,6 +92,51 @@ python3.11 tools/wx-clone-capture.py cleanup     # 清理副本与快照
 | preflight | ✅ `wechat.dylib` 的 PBKDF 导入桩已验证（`pbkdf_import_verified: true`），`ready_for_monitoring: true` |
 | capture | 布防成功，**无管理员弹窗**，等待登录触发密钥派生 |
 
+### 端到端跑通（2026-10-23 夜）
+
+密钥抓到后，导出 → 入库 → 双源画像全部走通，**真实数据已进库**：
+
+| 环节 | 结果 |
+|---|---|
+| 抓密钥 | ✅ `macos_clone_lldb_passphrase`，落盘 `~/.wcdb-key-tool/wechat-passphrase.json`（64 hex） |
+| 密钥登记 | ✅ 写进工具的 `account_keys.json`（保留原有图片密钥）→ 工具开始能解密 |
+| 解密验证 | ✅ `/api/sns/self_info` 返回账号信息；`/api/sns/timeline` 能读出真实朋友圈 |
+| 导出 | ✅ `POST /api/sns/exports`（`scope=selected` + 本人 username）→ `postCount: 5` |
+| 入库 | ✅ 走真实路由 `/api/wx/import` → `/api/wx/switch` → `/api/kb/build` → `/api/profile/build` |
+| 双源画像 | ✅ 「共 **95** 条动态（QQ 空间 90 条，微信朋友圈 5 条）」+ 朋友圈专属维度全部生成 |
+| 检索 | ✅ 命中朋友圈记录，id 带 `wx-` 前缀，`[来源] 微信朋友圈`，`confident: true` |
+| 1.0 不受影响 | ✅ 纯 QQ 输入的逐字节黄金基线仍然全过（95 条里 90 条与 1.0 完全一致） |
+
+> 本机微信安装全程零改动：抓密钥走的是一次性副本，抓完已把 `/Applications/WeChat.app`
+> 还原成原版（`Identifier` / `TeamIdentifier` / `CDHash` 校验一致）。
+
+### 新增：无头入库脚本
+
+`tools/wx-import-moments.mjs` —— 起一个指向真实 dataDir 的临时实例，走真实路由完成
+导入 → 启用 → 建库 → 画像，打印验收结果。不想点界面时一条命令搞定。
+
+### 修：bash 变量名被中文标点吃掉
+
+macOS 自带 bash 3.2 在 UTF-8 下会把 `$OLD，` 里的中文逗号当成变量名的一部分，
+`set -u` 直接报 `OLD?: unbound variable`。`wx-restore-copy.sh` / `wx-prepare-copy.sh`
+里所有变量引用改成 `${VAR}` 形式。
+
+### 附带修：隐私回扫器的两处误报（→ 包 v2.0.4）
+
+朋友圈正文入库后，真实语料多了 5 条带完整正文的动态，回扫器随即报出一堆「泄漏」，
+逐条查下来全是**误报**：
+
+| 现象 | 真因 | 修法 |
+|---|---|---|
+| 文档里的「什么样的」「实在不行」被判成真实内容 | 中文滑窗 4 字，语料一大就撞上通用短语 | 滑窗改 **6 字**（成句真实内容照样命中，已做正样本验证） |
+| 文档里所有正常的 `wxid` 字样被判成账号标识符 | 去设备后缀时 `wxid_<纯数字>` 被截成裸串 `wxid` | 截出来的基名也要过「像不像标识符」的检查 |
+
+> 第 2 条是**门自己抓到了门**：改完之后扫描器把我在注释里写下的一个真实好友标识符
+> 当场报了出来，说明这道门确实在干活。那行注释已改成占位写法。
+
+结构性规则一条没动（包内仍禁 `wxid_xxxxxxxx` 字面量，动态 ID / QQ 号各种进制 /
+cell_id / owner 前缀照旧全量回扫），QQ 侧指纹算法完全没碰。
+
 ### 指引同步改写
 
 `微信朋友圈取数操作指引.md`：§3.0 换成「两条路都走不通、第三条走得通」+ 签名矩阵证据；

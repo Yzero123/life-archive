@@ -56,10 +56,11 @@ cp -R qq-space-kb ~/.minimax/plugins/qq-space-kb
 
 ## 版本与回退
 
-当前版本 **v2.0.0**。完整历史见 [`CHANGELOG.md`](CHANGELOG.md)。
+当前版本 **v2.0.1**。完整历史见 [`CHANGELOG.md`](CHANGELOG.md)。
 
 | 版本 | 一句话 |
 |---|---|
+| v2.0.1 | 文档事实修正：SIP 只挡 SIWX，不挡 WeChatDataAnalysis |
 | v2.0.0 | 微信朋友圈历史记录接入：两个来源合成一份画像，朋友圈数据源默认关 |
 | v1.7.1 | 版本管理：CHANGELOG + 隐私回扫脚本 + 修文档示例里的真实说说 ID |
 | v1.7.0 | 对话架构：知识库整体当 prompt，事实红线只管硬事实 |
@@ -181,10 +182,15 @@ python3 miniapp/node/wx-export-runner.py discover
 python3 miniapp/node/wx-export-runner.py parse --db <已解密的 sns.db> --out wechat_sns.json
 ```
 
-> ⚠️ **macOS 上的实话**：微信朋友圈库是加密的，密钥只在运行中的微信进程内存里。
-> 无论是 SIWX 的 GUI 还是别的工具，**在 macOS 上取密钥都要用调试器附加进程**，
-> 而这需要关掉系统完整性保护（SIP）并重启一次。
-> 插件把这个动作整个**挪到了自己范围之外**——它不替你关 SIP，也不替你跑调试器。
+> ⚠️ **macOS 上的实话**：微信朋友圈库是加密的，密钥只在运行中的微信进程内存里，
+> 所以取密钥必须用调试器（LLDB）附加微信进程。**但要不要关 SIP，取决于你用哪个工具：**
+>
+> | 工具 | 要不要关 SIP | 你要做的 |
+> |---|---|---|
+> | **WeChatDataAnalysis 独立工具**（`WeDataKeyExtractor.app`） | **不用关**（官方文档明说「不移除隔离属性，不关闭 SIP/Gatekeeper」） | 给它「完全磁盘访问权限」；必要时给微信一次「开发者工具 → 单应用授权」；工具会**临时重签微信并自动恢复腾讯原版** |
+> | **SIWX** | **要关**（官方文档明说「root / `sudo` 也不行」） | `csrutil disable` + 重启进 Recovery 再开回来 |
+>
+> 插件把这个动作整个**挪到了自己范围之外**——它不替你关 SIP、不替你重签微信、不替你跑调试器。
 > 用什么方式导出由你决定，插件只负责把 JSON 收进来。
 
 ### 顶部状态栏说的是「现在能干什么」

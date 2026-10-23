@@ -56,6 +56,25 @@ ditto /Applications/WeChat.app.orig /Applications/WeChat.app
 
 `tools/wx-path-check.py` 的结论段改成给出**两条路**（A 改权限 / B 换副本），并写清各自的前置与回退。
 
+### 还替你预置了 LLDB 后端偏好
+
+查官方源码时发现：工具默认在本机（macOS 26.5.2 < 27、`wechat.dylib` 存在）会先试 **native** 捕获器，
+而 native 的 PBKDF 导入桩布局假设是按已知 build 写的，**微信 4.1.15 未验证**。
+native 一旦 attach 成功再失败，可能弄脏调试状态并强制结束事务 → 用户要重走一遍登录流程。
+
+已预置「用 LLDB 后端」：
+
+```
+~/Library/Caches/WeChatDataAnalysis/wechat-debug/capture-backend-preference.json
+```
+
+身份字段按本机实测填好（version 4.1.15 / build 270115 / 本机 CDHash / macOS 26.5.2），
+微信一升级就不匹配、工具会自动忽略。
+
+理由：LLDB 的断点计划是**运行时解析**本机 Mach-O UUID 与 `_CCKeyDerivationPBKDF` 导入桩地址得到的，
+不依赖硬编码版本表；本机已确认 `wechat.dylib` 的导入表里确实有 `_CCKeyDerivationPBKDF` ✅
+（LC_UUID `4714EE3E-7227-3ED3-A10F-5E000414AA61`）。
+
 > 插件代码一行未改。1.0 回归 121 项、2.0 68 项不受影响。
 
 ---

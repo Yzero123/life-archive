@@ -28,6 +28,36 @@ git revert <commit-sha>      # 逐个撤销
 
 ---
 
+## v2.0.2 — 2026-10-23
+
+**归一化器支持 WeChatDataAnalysis 的导出形状，导入按钮会扫到它的导出目录。**
+
+上一版只对齐了 SIWX 的 JSON 形状。这一版把**另一个主力工具**的形状也接上——
+照着它 `sns_export_service.py` 的实际输出写的，不是照着文档猜的。
+
+### 新增
+
+| 项 | 说明 |
+|---|---|
+| 归一化器支持 WeChatDataAnalysis 形状 | 账号标识在**顶层 `account`**（不是 `meta.account`）；时间叫 `createTime`；正文叫 `contentDesc`；位置是**纯字符串**；缩略图叫 `thumbUrl`；**卡片摊在 post 顶层**（`title` / `contentUrl` / `finderFeed` / `finderLive` / `official`），没有 `card` 子对象 |
+| 卡片按实际字段推导 | `finderFeed` → 视频号、`finderLive` → 直播、有 `title`/`contentUrl` → 链接。**不看 `type` 编号**——编号在不同微信版本里会漂移 |
+| 导入按钮扫到它的导出目录 | `~/Library/Containers/com.tencent.xinWeChat/Data/Documents/exports/<账号>/sns_*.json`（在微信容器内，原来扫不到） |
+| 文件名前缀放宽 | 认 `wechat_sns*.json` / `*朋友圈*.json` / `sns_*.json` 三种 |
+| 测试 | `tests/test-wx.mjs` 增加 6 项 WeChatDataAnalysis 形状用例（共 **62 项**） |
+
+### 契约
+
+**契约本身没变**（仍是 v1）。变的是插件能吃的**输入范围**变宽了——
+见 [微信朋友圈数据契约-2.0.md](https://github.com/Yzero123/qq-space-kb/blob/main/微信朋友圈数据契约-2.0.md) §3.1。
+
+### 回退
+
+```bash
+git checkout v2.0.1          # 只支持 SIWX 形状的版本
+```
+
+---
+
 ## v2.0.1 — 2026-10-23
 
 **修一处说错的事实：SIP 这道坎只挡 SIWX，不挡 WeChatDataAnalysis。**

@@ -7,6 +7,7 @@
 //   4. 对话：先检索，检索不到直接回固定话术；检索到才让 Agent 基于资料作答，并做接地校验
 
 import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { homedir, tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
@@ -942,9 +943,9 @@ async function reset(runtime) {
 /**
  * 朋友圈 JSON 的候选位置。
  *
- * 外部解密工具（SIWX 等）把导出结果放在它自己的目录里，用户不一定记得放哪。
- * 与其让人猜路径，不如扫几个常见位置。扫描是有界的：只下探一层目录、
- * 只认两种文件名前缀，不做全盘搜索。
+ * 外部解密工具（SIWX / WeChatDataAnalysis 等）把导出结果放在它自己的目录里，
+ * 用户不一定记得放哪。与其让人猜路径，不如扫几个常见位置。扫描是有界的：
+ * 最多下探两层目录、只认三种文件名前缀，不做全盘搜索。
  */
 async function scanWxCandidates(runtime) {
   const found = [];
@@ -956,32 +957,42 @@ async function scanWxCandidates(runtime) {
   };
   push(runtime.store.wxSnsPath);
   const home = homedir();
-  const roots = [join(home, 'Documents'), join(home, 'Downloads'), join(home, 'Desktop')];
-  const pattern = /^(wechat_sns.*\.json|.*朋友圈.*\.json)$/;
-  for (const root of roots) {
+  const roots = [
+    { dir: join(home, 'Documents'), depth: 2 },
+    { dir: join(home, 'Downloads'), depth: 2 },
+    { dir: join(home, 'Desktop'), depth: 2 },
+    // WeChatDataAnalysis 的朋友圈导出默认落在微信容器内：
+    //   <容器>/Documents/exports/<账号>/sns_<wxid>.json
+    // 这个位置在「文档/下载/桌面」之外，不加进来就找不到。
+    {
+      dir: join(home, 'Library/Containers/com.tencent.xinWeChat/Data/Documents/exports'),
+      depth: 3,
+    },
+  ];
+  // 三种前缀：我们的约定名、含「朋友圈」字样的中文名、第三方工具的 sns_*.json
+  const pattern = /^(wechat_sns.*\.json|.*朋友圈.*\.json|sns_.*\.json)$/;
+
+  const walk = async (dir, depth) => {
     let entries = [];
     try {
-      entries = await readdir(root, { withFileTypes: true });
+      entries = await readdir(dir, { withFileTypes: true });
     } catch {
-      continue;
+      return;
     }
     for (const entry of entries) {
-      const full = join(root, entry.name);
+      const full = join(dir, entry.name);
       if (entry.isFile()) {
         if (pattern.test(entry.name)) push(full);
         continue;
       }
       if (!entry.isDirectory()) continue;
-      let sub = [];
-      try {
-        sub = await readdir(full, { withFileTypes: true });
-      } catch {
-        continue;
-      }
-      for (const item of sub) {
-        if (item.isFile() && pattern.test(item.name)) push(join(full, item.name));
-      }
+      if (depth > 1) await walk(full, depth - 1);
     }
+  };
+
+  for (const root of roots) {
+    if (!existsSync(root.dir)) continue;
+    await walk(root.dir, root.depth);
   }
   return found;
 }

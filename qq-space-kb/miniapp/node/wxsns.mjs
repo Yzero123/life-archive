@@ -108,14 +108,70 @@ function normalizeCard(raw) {
   return card;
 }
 
+/**
+ * 从**扁平**的 post 字段合成卡片。
+ *
+ * WeChatDataAnalysis 的导出把卡片摊在 post 顶层：
+ * `title` / `contentUrl` / `finderFeed` / `finderLive` / `official`，
+ * 没有 SIWX 那种 `card: {...}` 子对象。卡片类型按**实际存在的字段**推导，
+ * 不看 type 编号——编号在不同微信版本里会漂移。
+ */
+function cardFromFlatPost(post) {
+  const finder = post.finderFeed ?? null;
+  const live = post.finderLive ?? null;
+  const official = post.official ?? null;
+  const source = text(post.sourceName);
+
+  if (finder && typeof finder === 'object' && Object.keys(finder).length) {
+    const nickname = text(finder.nickname);
+    return {
+      kind: 'finder',
+      title: text(finder.title),
+      description: text(finder.description ?? finder.desc),
+      url: '',
+      source,
+      cover: text(finder.thumbUrl ?? finder.coverUrl),
+      duration: num(finder.videoPlayDuration, 0),
+      finder: nickname ? { nickname } : {},
+    };
+  }
+  if (live && typeof live === 'object' && Object.keys(live).length) {
+    const nickname = text(live.nickname);
+    return {
+      kind: 'finder_live',
+      title: '',
+      description: text(live.desc ?? live.description),
+      url: '',
+      source,
+      cover: text(live.coverUrl ?? live.headUrl),
+      duration: 0,
+      live: nickname ? { nickname } : {},
+    };
+  }
+  const title = text(post.title);
+  const url = text(post.contentUrl);
+  if (title || url) {
+    return {
+      kind: 'link',
+      title,
+      description: text(post.contentDesc),
+      url,
+      source: source || text(official?.username),
+      cover: '',
+      duration: 0,
+    };
+  }
+  return null;
+}
+
 /** 媒体 → 统一形状。视频靠 type/duration 判断。 */
 function normalizeMedia(raw) {
   if (!raw || typeof raw !== 'object') return null;
   const url = text(raw.url);
-  const thumb = text(raw.thumb ?? raw.thumb_url);
+  const thumb = text(raw.thumb ?? raw.thumb_url ?? raw.thumbUrl);
   if (!url && !thumb) return null;
   const rawType = raw.type;
-  const duration = num(raw.duration ?? raw.videoDuration, 0);
+  const duration = num(raw.duration ?? raw.videoDuration ?? raw.videoPlayDuration, 0);
   const isVideo = rawType === 'video' || rawType === 6 || (rawType !== 'image' && rawType !== 2 && duration > 0);
   return {
     url,
@@ -169,10 +225,11 @@ function normalizePost(raw) {
     author: text(raw.author ?? raw.username ?? raw.user_name),
     time: toSeconds(raw.time ?? raw.create_time ?? raw.createTime ?? raw.ts),
     text: text(raw.text ?? raw.content ?? raw.contentDesc ?? raw.content_desc),
-    kind: num(raw.kind ?? raw.content_type, 0),
+    kind: num(raw.kind ?? raw.content_type ?? raw.type, 0),
     private: Boolean(raw.private),
     location: place,
-    card: normalizeCard(raw.card),
+    card: normalizeCard(raw.card) ?? cardFromFlatPost(raw),
+    forwardFrom: text(raw.sourceName ?? raw.source_username),
     media: media.map(normalizeMedia).filter(Boolean),
     likes: likes.map(normalizeLike).filter(Boolean),
     comments: comments.map(normalizeComment).filter(Boolean),
@@ -181,7 +238,12 @@ function normalizePost(raw) {
 
 /**
  * 归一化整份 payload。
- * 接受 `posts` / `moments` 两种数组键；owner 从 `meta.account` / `owner_wxid` 取。
+ *
+ * 接受三种顶层形状：
+ *   - SIWX：            `{ meta: { account }, posts: [...] }`
+ *   - WeChatDataAnalysis：`{ account, username, posts: [...] }`（account 在顶层）
+ *   - 本插件取数工具：  `{ meta: { account }, posts: [...] }`
+ * owner 依次从 `meta.account` → 顶层 `account` → 顶层 `username` → `owner_wxid` 取。
  */
 export function normalizeWxPayload(payload) {
   const source = payload && typeof payload === 'object' ? payload : {};
@@ -190,7 +252,7 @@ export function normalizeWxPayload(payload) {
     : Array.isArray(source.moments) ? source.moments
       : Array.isArray(source) ? source : [];
   const owner = stripDeviceSuffix(
-    meta.account ?? source.owner_wxid ?? source.owner ?? '',
+    meta.account ?? source.account ?? source.username ?? source.owner_wxid ?? source.owner ?? '',
   );
   const posts = list.map(normalizePost).filter(Boolean);
   return { owner, posts, meta };
@@ -325,7 +387,7 @@ export function parseWechatSns(payload, { ownerWxid = '' } = {}) {
     }
 
     record.post_url = post.card?.url || '';
-    record.forward_from = '';
+    record.forward_from = post.forwardFrom || '';
     record.raw = {
       tid: post.id,
       content_type: post.kind,

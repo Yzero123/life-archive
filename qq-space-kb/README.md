@@ -56,10 +56,11 @@ cp -R qq-space-kb ~/.minimax/plugins/qq-space-kb
 
 ## 版本与回退
 
-当前版本 **v2.0.1**。完整历史见 [`CHANGELOG.md`](CHANGELOG.md)。
+当前版本 **v2.0.2**。完整历史见 [`CHANGELOG.md`](CHANGELOG.md)。
 
 | 版本 | 一句话 |
 |---|---|
+| v2.0.2 | 归一化器支持 WeChatDataAnalysis 的导出形状，导入按钮扫到它的导出目录 |
 | v2.0.1 | 文档事实修正：SIP 只挡 SIWX，不挡 WeChatDataAnalysis |
 | v2.0.0 | 微信朋友圈历史记录接入：两个来源合成一份画像，朋友圈数据源默认关 |
 | v1.7.1 | 版本管理：CHANGELOG + 隐私回扫脚本 + 修文档示例里的真实说说 ID |
@@ -761,7 +762,7 @@ node tests/privacy-scan.mjs
 
 ```bash
 node tests/test.mjs           # 121 项断言
-node tests/test-wx.mjs        # 56 项断言（2.0）：1.0 逐字节回归锁 / 解析 / 双源画像 / 端到端
+node tests/test-wx.mjs        # 62 项断言（2.0）：1.0 逐字节回归锁 / 解析 / 双源画像 / 端到端
 node tests/export-session.mjs  # 48 项断言：一次扫码（会话管理器 / 编排器 / 接线 / 页面）
 node tests/mcp-smoke.mjs      # MCP 服务器冒烟：真启动、真发 JSON-RPC、真调五个工具
 node tests/visualizer-static.mjs  # 可视化样例的静态审查：信封、主题 token、安全、载荷

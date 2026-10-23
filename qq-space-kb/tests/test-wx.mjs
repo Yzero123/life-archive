@@ -35,6 +35,7 @@ import {
 import {
   composeWxContent,
   countBySource,
+  mergeWechatSnsPayload,
   normalizeWxPayload,
   parseWechatSns,
   stripDeviceSuffix,
@@ -864,6 +865,114 @@ await checkAsync('落盘的 raw 来自本人那份', async () => {
 
 await rm(scanRoot, { recursive: true, force: true });
 await rm(importDir, { recursive: true, force: true });
+
+// ---------------------------------------------------------------------------
+// [6] 多次导入必须「合并」而不是「覆盖」
+//
+// 本地 sns.db 的朋友圈缓存窗口会滑动：今天导一次是最近一批，
+// 三个月后窗口滑走再导一次可能只剩更少的条数。
+// 如果导入是覆盖，之前攒下的就白攒了，历史永远攒不齐。
+// ---------------------------------------------------------------------------
+
+console.log('\n[6] 多次导入合并（缓存窗口滑动时历史只增不减）');
+
+const WX_SECOND = {
+  meta: { account: WX_OWNER, count: 2, format: 'json', source: 'test' },
+  posts: [
+    {
+      // 与第一次重叠的一条，点赞数变了
+      id: '1001',
+      time: ts('2018-04-12T22:10:00Z'),
+      author: WX_OWNER,
+      text: '换了住处，阳台正对着一片工地。',
+      kind: 1,
+      location: null,
+      media: [],
+      likes: [
+        { name: '演示同学甲', username: 'wxid_demo8888' },
+        { name: '演示同学丙', username: 'wxid_demo6666' },
+      ],
+      comments: [{ name: '演示同学乙', username: 'wxid_demo7777', text: '那边现在什么样了' }],
+    },
+    {
+      // 更早的一条，模拟窗口滑到了更靠前的内容
+      id: '1000',
+      time: ts('2016-05-04T08:00:00Z'),
+      author: WX_OWNER,
+      text: '更早的一条，用来模拟窗口往回滑。',
+      kind: 1,
+      location: null,
+      media: [],
+      likes: [],
+      comments: [],
+    },
+  ],
+};
+
+const mergeDir = await mkdtemp(join(tmpdir(), 'wx-merge-'));
+const mergeStore = new Store(mergeDir);
+await mergeStore.init();
+
+const firstImport = await importWx({ store: mergeStore }, { payload: WX_PAYLOAD });
+check('第一次导入：条数就是这份数据里的条数', () => {
+  assert.equal(firstImport.ok, true);
+  assert.equal(firstImport.count, 4);
+  assert.equal(firstImport.merged, false);
+});
+
+const secondImport = await importWx({ store: mergeStore }, { payload: WX_SECOND });
+check('第二次导入：条数是累加的，不是被覆盖成 2 条', () => {
+  assert.equal(secondImport.ok, true);
+  assert.equal(secondImport.count, 5, '应为 4 + 1 条新的');
+  assert.equal(secondImport.merged, true);
+  assert.equal(secondImport.added, 1);
+});
+
+await checkAsync('落盘的 raw 保留了两批的并集', async () => {
+  const raw = JSON.parse(await readFile(join(mergeDir, 'raw', 'wechat_sns.json'), 'utf8'));
+  const ids = raw.posts.map((p) => String(p.id));
+  assert.equal(raw.posts.length, 6, '第一批 5 条 + 第二批新来的 1 条');
+  assert.ok(ids.includes('1000'), '更早的那条必须还在');
+  assert.ok(ids.includes('1001'));
+  assert.ok(ids.includes('1002'));
+  assert.ok(ids.includes('1003'));
+  assert.equal(raw.postCount, 6);
+});
+
+await checkAsync('同一条动态取后来的那份（点赞数会变）', async () => {
+  const raw = JSON.parse(await readFile(join(mergeDir, 'raw', 'wechat_sns.json'), 'utf8'));
+  const hit = raw.posts.find((p) => String(p.id) === '1001');
+  assert.equal(hit.likes.length, 2);
+});
+
+await checkAsync('合并后重新解析，本人条数也是 5', async () => {
+  const raw = JSON.parse(await readFile(join(mergeDir, 'raw', 'wechat_sns.json'), 'utf8'));
+  const parsed = parseWechatSns(raw, { ownerWxid: WX_OWNER });
+  assert.equal(parsed.stats.kept, 5);
+});
+
+check('mergeWechatSnsPayload：第一次没有旧数据时原样返回', () => {
+  const res = mergeWechatSnsPayload(WX_PAYLOAD, null);
+  assert.equal(res.merged, false);
+  assert.equal(res.added, 5);
+  assert.equal(res.payload.posts.length, 5);
+});
+
+check('mergeWechatSnsPayload：旧数据全被新数据覆盖时条数不增长', () => {
+  const res = mergeWechatSnsPayload(WX_SECOND, WX_SECOND);
+  assert.equal(res.merged, true);
+  assert.equal(res.added, 0);
+  assert.equal(res.total, 2);
+});
+
+check('mergeWechatSnsPayload：结果按时间倒序', () => {
+  const res = mergeWechatSnsPayload(WX_SECOND, WX_PAYLOAD);
+  const times = res.payload.posts.map((p) => Number(p.time) || 0);
+  const sorted = [...times].sort((a, b) => b - a);
+  assert.deepEqual(times, sorted);
+});
+
+await rm(mergeDir, { recursive: true, force: true });
 
 console.log('\n' + '='.repeat(56));
 console.log(`通过 ${passed} 项，失败 ${failed} 项`);

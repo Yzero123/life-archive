@@ -386,17 +386,24 @@ const tools = [
         || kb.chunks.map((chunk) => chunk.text).join('\n');
       const ratio = groundingRatio(answer, context);
       const factsOk = factualTokensGrounded(answer, context);
-      const ok = ratio >= 0.27 && factsOk;
+      // 措辞重合度**不再**作为拒答条件，只留作展示参考。
+      //
+      // 为什么撤掉：中文口语回答里虚词二元组（「那帮人」「倒是没少」）天然不重合，
+      // 拿它当闸门会把**有据可依**的回答误杀成固定话术——那看起来像「知识库里没有」，
+      // 其实是有。实测：照资料原话转述 0.73，有据的口语转述 0.33，掺假的经历 0.17，
+      // 纯编造 0.04——有据的和掺假的根本分不开，拿它当闸门只会误杀。
+      // 硬红线是事实级校验（日期 / 数字 / 模糊量 / 外文专名 / 引介人名不许编）。
+      const ok = factsOk;
       return {
         ok,
         ratio: Number(ratio.toFixed(3)),
         ratioMin: 0.27,
         factsOk,
-        reason: ok ? '' : factsOk ? 'low_grounding_ratio' : 'ungrounded_factual_claim',
+        reason: ok ? '' : 'ungrounded_factual_claim',
         fallbackAnswer: FALLBACK_ANSWER,
         note: ok
           ? '有据，可以回答。'
-          : '没落在资料里，必须改用固定话术。',
+          : '编了资料外的事实，必须改用固定话术。',
       };
     },
   },

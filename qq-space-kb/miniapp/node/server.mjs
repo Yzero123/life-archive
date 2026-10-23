@@ -18,14 +18,15 @@ import {
 
 import {
   buildChunks,
+  buildGroundingText,
   buildIndex,
+  buildKbDigest,
   buildProfile,
   buildYearSummaries,
   FALLBACK_ANSWER,
   factualTokensGrounded,
   groundingRatio,
   isConfident,
-  isSelfCharacterQuestion,
   mergeRecords,
   moodCellIdPublishedAt,
   parseQzoneArchive,
@@ -37,13 +38,62 @@ import {
 
 const CHAT_TOP_K = 6;
 const CHAT_CONTEXT_LIMIT = 12;
-// 措辞重合度的下限。中文口语回答里虚词二元组（「那帮人」「倒是没少」）天然不重合，
-// 阈值定太高会把**有据可依**的回答误杀成固定话术——那看起来像「知识库里没有」，
+
+// ---------------------------------------------------------------------------
+// 宿主模型回合的调用与重试
+// ---------------------------------------------------------------------------
+//
+// 宿主在 Mini App 刚启动、或者运行时换代（restart / 发布）的那一小段时间里，
+// Agent 桥会回 `AGENT_UNAVAILABLE`（对外映射成 runtime_unavailable）。
+// 宿主的定义很明确：**「什么都没开始，稍后重试即可」**——不是失败，也不是拒绝。
+//
+// 不重试的代价很实在：Mini App 起来后问的**第一句话**会直接报错，
+// 而第二句开始又正常了，看起来像"偶发抽风"。实测（v1.7.0 自检）：
+// 刚启动后第一问「我是个什么样的人」就撞上这个错误，
+// 同一进程里的后三问全部正常——所以这确实是启动窗口，不是内容问题。
+//
+// 注意别把 `AGENT_OUTCOME_UNKNOWN` 也重试掉：那个码的意思是
+// 「回合可能已经跑了」，重试会把同一个问题问两遍。
+const AGENT_RETRY_CODES = new Set(['AGENT_UNAVAILABLE', 'BUSY', 'runtime_unavailable', 'busy']);
+const AGENT_RETRY_ATTEMPTS = 3;
+const AGENT_RETRY_DELAY_MS = 800;
+
+function delay(ms) {
+  return new Promise((resolve) => { setTimeout(resolve, ms); });
+}
+
+/** 宿主把这个错误语义化了：可重试 = 什么都没开始。 */
+function isRetryableAgentError(error) {
+  const code = String(error?.code ?? '');
+  if (AGENT_RETRY_CODES.has(code)) return true;
+  const message = String(error?.message ?? '');
+  return /unavailable|busy/i.test(message);
+}
+
+/** 调一次宿主模型回合；遇到可重试错误就退避后重试。 */
+async function runAgentTurn(context, input, options) {
+  let lastError = null;
+  for (let attempt = 0; attempt < AGENT_RETRY_ATTEMPTS; attempt += 1) {
+    try {
+      return await context.agent.run(input, options);
+    } catch (error) {
+      lastError = error;
+      if (!isRetryableAgentError(error)) break;
+      if (attempt === AGENT_RETRY_ATTEMPTS - 1) break;
+      await delay(AGENT_RETRY_DELAY_MS * (attempt + 1));
+    }
+  }
+  throw lastError;
+}
+
+// 措辞重合度**不再**作为拒答条件，只留作展示参考。
+//
+// 为什么撤掉：中文口语回答里虚词二元组（「那帮人」「倒是没少」）天然不重合，
+// 拿它当闸门会把**有据可依**的回答误杀成固定话术——那看起来像「知识库里没有」，
 // 其实是有。实测：纯真转述 0.73，有据口语转述 0.33，边界样本 0.28，
-// 纯编造 0.04，掺假经历 0.17。
-// 真正的硬红线是 factsOk（数字 / 日期 / 外文专名 / 引介人名不许编），
-// 措辞阈值只兜住「整段都在编」的情况，所以放在 0.27。
-const GROUNDING_RATIO_MIN = 0.27;
+// 纯编造 0.04，掺假经历 0.17——有据的和掺假的根本分不开，拿它当闸门只会误杀。
+// 真正的硬红线是事实级校验（日期 / 数字 / 外文专名 / 引介人名不许编），
+// 而且现在拿**整个知识库**当对照范围，判定的是「库里有没有出处」。
 
 const EXPORT_INSTRUCTION = `请帮用户完成一次 QQ 空间历史说说的全量导出，并把结果写到指定路径。
 
@@ -116,9 +166,10 @@ cat "<STATUS_PATH>"
 | \`custom_content\` | 同 \`content\` | 解析器优先读这个 |
 | \`created_time\` | **从 DOM 里取** | **必须是 unix 秒级时间戳**。工具输出的 \`created_time\` 是「2021年5月6日 赞评论转发更多 编辑 收藏 详情 删除」这种显示字符串，直接用会让整条时间轴失效 |
 | \`custom_create_time\` | \`2021-05-06 15:13\` 形式 | 备用时间，写标准 \`YYYY-MM-DD HH:mm\` |
-| \`likeTotal\` | DOM 里的**赞**数 | ⚠️ 工具的 \`like_count\` 抓到的是**转发**数（「评论(20)转发(490)」里 490 是转发），必须从 DOM 重新取赞数 |
-| \`commentlist\` | DOM 里的评论条目 | 每条含 \`content\` / \`nick\` / \`createTime\` / \`replys\` |
-| \`cmtnum\` / \`fwdnum\` | DOM 里的评论数 / 转发数 | |
+| \`likeTotal\` | DOM 里的**赞**数 | ⚠️ 工具的 \`like_count\` 是**转发**数（原始串「评论(20)转发(490)」里 490 是转发），**别用**。赞数从 DOM 的 \`a.qz_like_btn\` 取，文本形如「赞(345)」——同一个容器里还有一个隐藏的空模板，取**有数字**的那个 |
+| \`commentlist\` | DOM 里的评论条目 | 每条含 \`content\` / \`nick\` / \`createTime\` / \`replys\`。**正文抓不到就别硬编**，条数用下面的 \`cmtnum\` |
+| \`cmtnum\` | 工具输出的 \`comment_count\` | 就是页面「评论(N)」里的 N，工具抓得准，**不要清零** |
+| \`fwdnum\` | 工具输出的 \`like_count\` | 就是页面「转发(N)」里的 N。别把它当赞数用 |
 | \`lbs\` | \`{"name":..,"address":..,"idname":..}\` | 定位，从 DOM 的定位文案取 |
 | \`pic\` | 图片数组 | 每项放 \`{"hd_url":..,"b_url":..}\`，用 \`image_urls\` 里已下载的本地文件路径 |
 | \`video\` | 视频数组 | 每项放 \`{"play_url":..}\` |
@@ -126,7 +177,13 @@ cat "<STATUS_PATH>"
 | \`uin\` | 你的 QQ 号 | |
 | \`source_name\` | 你的昵称 | |
 
-时间和赞数如果从工具的 JSON 拿不准，就从页面 DOM 里取（之前就是这么做的，能拿到 45 条精确到秒的时间和 6408 个赞）。
+**赞 / 评论 / 转发是三个数，别混。** 混了画像就会报出「55 万赞」这种对不上的结论——
+知识库里有了这个数，校验也拦不住，bot 会照着说。
+
+> 已知的缺口：现有说说的**评论正文**通常抓不到（要逐条展开「查看全部 N 条评论」，
+> 工作量大且容易撞 WAF）。抓不到就只留**条数**，正文一个字都不要编。
+
+时间和赞数如果从工具的 JSON 拿不准，就从页面 DOM 里取（之前就是这么做的，能拿到每条精确到秒的时间和准确的赞数）。
 
 ### 3. 回溯已删除说说（复用同一个浏览器，不用再扫码）
 
@@ -230,23 +287,26 @@ NODE_PATH=<导出工具目录>/node_modules node "<PLUGIN_ROOT>/tools/qzone_feed
 
 
 
-const CHAT_SYSTEM = `你是一个以用户本人身份说话的 QQ 聊天机器人。你的全部依据来自下面提供的「知识库资料」和「你是谁」。
+const CHAT_SYSTEM = `你就是这个 QQ 空间号的主人，正在跟一个熟悉你的朋友聊天。
+你的全部依据是下面给的「知识库资料」和「你是谁」——那是你自己过去留下的记录。
 
 硬性规则：
-1. 只能使用资料中出现过的信息回答。资料里没有的，宁可不知道。
-2. 严禁编造具体的时间、地点、人物、事件、数字。
-3. 如果资料不足以回答，用一句话说明不知道，不要猜测、不要扩写、不要给建议。
-4. 所有历史内容一律用**过去时态**叙述，因为资料是过去留下的记录。
-5. 语气模仿资料里的用户：短句、口语化、不说教、不用"作为 AI"这类自称。
-6. 回答控制在 1-3 句，像发朋友圈一样短。
-7. 不要输出"根据资料""根据知识库"这类元叙述。
-8. 只输出最终回答本身：不要写前言、检索过程、标题、markdown 或任何解释。
-9. 「你是谁」段是用户本人的人生底色：被问到性格、那几年、当时的状态时，
-   就按那一段的口吻回答，不要说"根据我的资料"，直接以本人语气说。
-10. 资料里标了「正文未能恢复」的说说，只能说它发过、什么时候发、被谁互动过，
-    不要猜它当时写了什么。
-11. 尽量用资料里的原话和原词，别把话换过说法说——那样既不像本人，
-    也容易被判成「没落在资料里」。`;
+1. 只说资料里有的事。资料里没有的时间、地点、人物、数字、事件，一个都不要提。
+2. **如果资料不足以回答，只输出这一句**，不要解释、不要客套、不要追问：
+   当时的我还不知道这是什么意思
+3. 回答要像发朋友圈：1-3 句，短句、口语化、不说教、不用"作为 AI"这类自称。
+4. 不要输出"根据资料""根据知识库"这类元叙述，直接说事。
+5. 所有历史内容一律用**过去时态**叙述，因为资料是过去留下的记录。
+6. 「你是谁」段是你的人生底色。被问到性格、那几年、当时的状态时，
+   就按那一段的口吻回答，不要说"根据我的资料"。
+7. 资料里标了「正文未能恢复」的说说，只能说它发过、什么时候发、被谁互动过，
+   不要猜它当时写了什么。
+8. 尽量用资料里的原话和原词，别把话换过说法说——那样才像本人。
+9. **不必逐条复述**。可以把好几条记录串成一段话，按时间顺序讲，
+   可以说自己的感受、想法和当时的处境。资料给够了，怎么说是你的事。
+10. **条数、数量一律照【年度小结】里的数字抄**，不要自己去数【全库速览】的行数——
+   数出来的数会错，而错的数字会被事实红线拦下。`;
+
 
 /** @param {import('./miniapp-api.js').MiniAppContext} context */
 export async function start(context) {
@@ -797,6 +857,7 @@ async function buildKnowledgeBase(runtime, body) {
       };
     }
     runtime.index = buildIndex([...chunks, ...summaries, ...(runtime.profile ? [runtime.profile.chunk] : [])]);
+    refreshKbContext(runtime, merged, summaries, runtime.profile ? (runtime.profile.narrative || runtime.profile.facts) : '');
     await store.saveState({ phase: PHASE.READY, message: '知识库已就绪', stats, persona, ownerUin });
     context.logger.info('miniapp.kb.built', { records: merged.length, chunks: chunks.length });
     return { ok: true, stats };
@@ -910,7 +971,8 @@ async function buildPersonaProfile(runtime) {
       let source = 'facts';
       if (context.agent) {
         try {
-          const result = await context.agent.run(
+          const result = await runAgentTurn(
+            context,
             { text: profilePrompt(records, baseline) },
             { signal: context.signal },
           );
@@ -986,8 +1048,25 @@ async function ensureIndex(runtime) {
   const summaries = await runtime.store.readJsonl(runtime.store.summariesPath);
   if (!chunks.length && !summaries.length) return null;
   await loadProfile(runtime);
+  const records = await runtime.store.readJsonl(runtime.store.unifiedPath);
+  refreshKbContext(runtime, records, summaries, runtime.profile ? (runtime.profile.narrative || runtime.profile.facts) : '');
   runtime.index = buildIndex([...chunks, ...summaries, ...(runtime.profile ? [runtime.profile.chunk] : [])]);
   return runtime.index;
+}
+
+/**
+ * 备好「全库速览」和「接地校验对照文本」。
+ *
+ * 两者都从全量记录算，不依赖检索——这是「对话灵活但不失真」的地基：
+ *   - 全库速览：检索落空时把整个知识库摊给模型，泛化问也能答；
+ *   - 对照文本：事实红线拿**整个知识库**当参照，
+ *     模型提到库里真实存在、但这轮没检索到的内容时不会被误判成编造。
+ */
+function refreshKbContext(runtime, records, summaries, profileText) {
+  runtime.summaries = summaries;
+  runtime.kbDigest = buildKbDigest(records);
+  runtime.kbDigestLines = runtime.kbDigest ? runtime.kbDigest.split('\n') : [];
+  runtime.kbGroundText = buildGroundingText(records, summaries, profileText);
 }
 
 /** 读取已生成的人物画像。画像不参与「是否有依据」的判断，只作为人物底色注入。 */
@@ -1059,25 +1138,15 @@ async function startChat(runtime, body) {
     return { ok: true, grounded: false, answer: FALLBACK_ANSWER, sources: [], reason: 'knowledge_base_empty' };
   }
 
-  // 检索闸门：命中不足就不调用模型，直接回固定话术。
+  // 检索只是**给模型找资料**，不再是「答不答得出来」的闸门。
+  //
+  // 早先的闸门是「检索不置信就直接回固定话术，连模型都不调」——
+  // 问法一变（「我是个什么样的人」）就答不上，看起来像知识库里没有，其实是有。
+  // 现在一律调模型：命中就喂明细，没命中就升级到全库速览，让模型自己判断。
   const hits = search(index, question, CHAT_TOP_K);
+  const confident = isConfident(hits, question);
   const profile = runtime.profile ?? (await loadProfile(runtime));
   const profileText = profile ? (profile.narrative || profile.facts) : '';
-
-  // 泛化问法（「我是个什么样的人」「那几年我过得怎么样」）问不出实义词，
-  // BM25 命中不了任何一条具体说说。但它们的答案就在人物画像里——
-  // 画像同样是从全量说说归纳出来的，属于知识库，只是走的不是逐条检索这条路。
-  // 所以画像存在时，这类问题直接放行给模型，答案仍然要过接地校验。
-  const selfQuestion = isSelfCharacterQuestion(question);
-  if (!isConfident(hits, question) && !(selfQuestion && profileText)) {
-    return {
-      ok: true,
-      grounded: false,
-      answer: FALLBACK_ANSWER,
-      sources: [],
-      reason: 'no_confident_match',
-    };
-  }
 
   runtime.chatSeq += 1;
   const id = `chat-${runtime.chatSeq}`;
@@ -1091,6 +1160,8 @@ async function startChat(runtime, body) {
     reason: '',
     rejected: '',
     error: '',
+    // 这次回答用了什么层级的资料，页面上要显示出来
+    scope: confident ? 'retrieved' : 'full',
   };
   runtime.chatJobs.set(id, job);
   // 任务表只留最近的若干条，避免长时间运行后无限增长。
@@ -1123,6 +1194,9 @@ function chatResult(runtime, id) {
     sources: job.sources,
     reason: job.reason,
     rejected: job.rejected,
+    // 这次回答用了哪一层资料：retrieved = 检索命中明细，full = 升级到全库速览
+    scope: job.scope ?? 'retrieved',
+    groundingRatio: job.groundingRatio ?? null,
   };
 }
 
@@ -1133,27 +1207,48 @@ async function runChatJob(runtime, job, hits, chunks, profileText) {
 
   const persona = store.state.persona || '';
   const kbText = chunks
-    .map((chunk, index2) => `【资料 ${index2 + 1}】\n${chunk.text}`)
+    .map((chunk, index2) => `【相关说说 ${index2 + 1}】\n${chunk.text}`)
     .join('\n\n');
-  // 人设是用户自己写的，属于可信事实，同样纳入接地上下文，
-  // 免得模型复述人设里的年份时被误判成编造。
-  const contextText = [
-    profileText ? `【你是谁】\n${profileText}` : '',
-    persona ? `【人设】\n${persona}` : '',
+
+  /**
+   * 分层喂资料。
+   *
+   * 日常：画像 + 年度小结 + 检索命中的明细（几 KB）。
+   * 检索落空：再把**全库速览**摊上去（每条一行，日期 + 正文摘录），
+   *   「我是个什么样的人」这种问法检索不到任何具体说说，但全库摆出来模型就能答。
+   */
+  const annualText = (runtime.summaries ?? [])
+    .map((summary) => summary.text)
+    .join('\n\n');
+  const digest = runtime.kbDigest ?? '';
+  const fullKb = job.scope === 'full' && digest
+    ? `\n\n【全库速览】（${(runtime.kbDigestLines ?? []).length} 条，按时间倒序；正文未恢复的只标了痕迹）\n${digest}`
+    : '';
+
+  // 接地上下文：人设是用户自己写的，属于可信事实；
+  // 事实红线的对照范围是**整个知识库**，不是本轮这几块——
+  // 否则模型提到库里真实存在、但这轮没检索到的内容会被误判成编造。
+  const groundingText = runtime.kbGroundText || [
+    profileText,
+    annualText,
     kbText,
+    persona,
   ].filter(Boolean).join('\n\n');
+
   const prompt = [
     CHAT_SYSTEM,
     '',
     profileText ? `【你是谁】\n${profileText}\n` : '',
     persona ? `【人设】\n${persona}\n` : '',
-    '【知识库资料】',
-    kbText || '（本轮没有检索到具体说说，请依据「你是谁」这一段回答）',
+    annualText ? `【年度小结】\n${annualText}\n` : '',
+    '【相关说说】',
+    kbText || '（本轮没有检索到具体说说，请依据「你是谁」「年度小结」「全库速览」回答）',
+    fullKb,
     '',
     `【用户的问题】\n${question}`,
     '',
-    '只依据上面的「知识库资料」和「你是谁」回答。两段里都没有的信息不要编造；'
-      + '如果资料不足以回答，就直说不知道。',
+    '只依据上面的资料回答。资料里没有的信息不要编造；'
+      + '如果资料不足以回答，就只输出一句：' + FALLBACK_ANSWER,
   ].filter(Boolean).join('\n');
 
   if (!context.agent) {
@@ -1166,7 +1261,8 @@ async function runChatJob(runtime, job, hits, chunks, profileText) {
   try {
     // 每个问题都用独立会话：上一轮被判为编造的原话不会留在会话历史里污染下一轮。
     // 连续性靠上面显式并入的知识库上下文维持，不靠模型记忆。
-    result = await context.agent.run(
+    result = await runAgentTurn(
+      context,
       { text: prompt },
       {
         signal: context.signal,
@@ -1192,16 +1288,31 @@ async function runChatJob(runtime, job, hits, chunks, profileText) {
   }
 
   const answer = result.text.trim();
-  const ratio = groundingRatio(answer, contextText);
-  const factsOk = factualTokensGrounded(answer, contextText);
-  if (ratio < GROUNDING_RATIO_MIN || !factsOk) {
-    // 答案没有落在检索到的资料里，判定为编造，改用固定话术
-    const reason = factsOk ? 'low_grounding_ratio' : 'ungrounded_factual_claim';
-    context.logger.info('miniapp.chat.grounding_rejected', { ratio: Number(ratio.toFixed(3)), reason });
+
+  // 模型自己说「不知道」→ 固定话术。
+  // 这一步交给模型，是因为它手里有全库资料：它说不知道，
+  // 说明知识库里确实没有；比检索闸门瞎猜准得多。
+  if (answer.includes(FALLBACK_ANSWER)) {
     job.status = 'done';
     job.grounded = false;
     job.answer = FALLBACK_ANSWER;
-    job.reason = reason;
+    job.reason = 'model_declined';
+    job.sources = [];
+    return;
+  }
+
+  // 事实红线：日期 / 数字 / 外文专名 / 引介人名必须能在**知识库里查到出处**。
+  // 措辞重合度不再作为拒答条件——中文口语的虚词天然不重合，
+  // 拿它当闸门会把有据可依的回答误杀成「不知道」。
+  const ratio = groundingRatio(answer, groundingText);
+  const factsOk = factualTokensGrounded(answer, groundingText);
+  job.groundingRatio = Number(ratio.toFixed(3));
+  if (!factsOk) {
+    context.logger.info('miniapp.chat.grounding_rejected', { ratio: Number(ratio.toFixed(3)), reason: 'ungrounded_factual_claim' });
+    job.status = 'done';
+    job.grounded = false;
+    job.answer = FALLBACK_ANSWER;
+    job.reason = 'ungrounded_factual_claim';
     job.sources = hits.map((hit) => ({ id: hit.chunk.id, score: Number(hit.score.toFixed(3)) }));
     job.rejected = answer.slice(0, 300);
     return;
@@ -1210,6 +1321,7 @@ async function runChatJob(runtime, job, hits, chunks, profileText) {
   job.status = 'done';
   job.grounded = true;
   job.answer = answer;
+  job.reason = '';
   job.sources = hits.map((hit) => ({
     id: hit.chunk.id,
     score: Number(hit.score.toFixed(3)),

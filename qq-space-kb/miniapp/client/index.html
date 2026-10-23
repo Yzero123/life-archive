@@ -179,6 +179,11 @@
       .session[data-state='ready'] .session-dot { background: var(--mcode-success); }
       .session[data-state='waiting'] .session-dot { background: var(--mcode-warning); }
       .session[data-state='off'] .session-dot { background: var(--mcode-danger); }
+      .sources-note {
+        margin-top: 6px;
+        font-size: 12px;
+        color: var(--mcode-text-subtle);
+      }
       .note {
         margin: 12px 0 0;
         font-size: 12px;
@@ -349,7 +354,7 @@
       <section class="panel" aria-labelledby="chat-title">
         <div class="panel-head">
           <h2 id="chat-title">对话</h2>
-          <span class="panel-note" id="chat-note">回答只依据知识库；查不到时固定回复「当时的我还不知道这是什么意思」</span>
+          <span class="panel-note" id="chat-note">回答只依据知识库；资料不足以回答时固定回复「当时的我还不知道这是什么意思」</span>
         </div>
         <div class="chat-log" id="chat-log" aria-live="polite">
           <p class="empty" id="chat-empty">还没有对话。先完成导出并构建知识库。</p>
@@ -581,11 +586,11 @@
         var FALLBACK_REASON = {
           knowledge_base_empty: '知识库还是空的',
           no_confident_match: '知识库里没有这条',
-          low_grounding_ratio: '回答没落在资料里，已拦下',
+          model_declined: '知识库里没有这条',
           ungrounded_factual_claim: '回答含资料外的事实，已拦下',
         };
 
-        function appendMessage(role, text, grounded, sources, reason, rejected) {
+        function appendMessage(role, text, grounded, sources, reason, rejected, scope) {
           if (el.chatEmpty) { el.chatEmpty.remove(); el.chatEmpty = null; }
           var wrap = document.createElement('div');
           wrap.className = 'msg';
@@ -620,7 +625,8 @@
             var details = document.createElement('details');
             details.className = 'sources';
             var summary = document.createElement('summary');
-            summary.textContent = '依据 ' + sources.length + ' 条知识库记录';
+            summary.textContent = '依据 ' + sources.length + ' 条知识库记录'
+              + (scope === 'full' ? '（检索没命中，已翻全库）' : '');
             details.appendChild(summary);
             var list = document.createElement('ul');
             sources.forEach(function (source) {
@@ -630,6 +636,12 @@
             });
             details.appendChild(list);
             wrap.appendChild(details);
+          } else if (grounded !== false && scope === 'full') {
+            // 泛化问：没有逐条来源，但确实翻过全库——说清楚，别让人以为没依据
+            var note = document.createElement('div');
+            note.className = 'sources-note';
+            note.textContent = '依据：全库速览（检索没命中具体说说，已翻全部记录）';
+            wrap.appendChild(note);
           }
 
           el.chatLog.appendChild(wrap);
@@ -719,7 +731,7 @@
             if (!result.started) {
               // 检索闸门当场就给了固定话术，不用等模型。
               pending.remove();
-              appendMessage('bot', result.answer, result.grounded, result.sources, result.reason, result.rejected);
+              appendMessage('bot', result.answer, result.grounded, result.sources, result.reason, result.rejected, result.scope);
               return;
             }
             // 模型回合在后台跑：轮询取结果。
@@ -744,7 +756,7 @@
               }
               pending.remove();
               if (result.ok && result.status === 'done') {
-                appendMessage('bot', result.answer, result.grounded, result.sources, result.reason, result.rejected);
+                appendMessage('bot', result.answer, result.grounded, result.sources, result.reason, result.rejected, result.scope);
               } else {
                 appendMessage('bot', result.message || '生成回答失败', false, null, null, null);
               }

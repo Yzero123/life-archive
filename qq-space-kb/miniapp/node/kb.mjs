@@ -157,6 +157,12 @@ export function emptyRecord() {
     videos: [],
     location: '',
     like_count: 0,
+    // 评论数 / 转发数与赞数分开记。
+    // 踩过的坑：导出工具的 `like_count` 抓的是**转发**数（原始串「评论(20)转发(490)」里
+    // 490 是转发），赞数要从页面 DOM 的 `a.qz_like_btn`（文本形如「赞(345)」）单独取。
+    // 三个数混在一起，画像就会报出「55 万赞」这种对不上的结论。
+    comment_count: 0,
+    forward_count: 0,
     like_users: [],
     comments: [],
     post_url: '',
@@ -179,6 +185,8 @@ function mergeInto(base, other) {
     if (!base[key] && other[key]) base[key] = other[key];
   }
   base.like_count = Math.max(Number(base.like_count ?? 0), Number(other.like_count ?? 0));
+  base.comment_count = Math.max(Number(base.comment_count ?? 0), Number(other.comment_count ?? 0));
+  base.forward_count = Math.max(Number(base.forward_count ?? 0), Number(other.forward_count ?? 0));
   base.recovered = Boolean(base.recovered) || Boolean(other.recovered);
   base.body_missing = !(base.content ?? '').trim();
   base.published_at = Math.max(Number(base.published_at ?? 0), Number(other.published_at ?? 0));
@@ -306,9 +314,14 @@ export function parseQzoneExport(payload) {
     record.images = pickMedia(item.pic, ['hd_url', 'b_url', 'url', 'origin_url']);
     record.videos = pickMedia(item.video, ['play_url', 'url', 'video_url']);
     record.location = pickLocation(item);
-    record.like_count = Number(item.likeTotal ?? item.like_count ?? 0);
+    // 赞数：导出工具的 like_count 是**转发**数，赞数要从 DOM 的「赞(N)」单独取。
+    // 所以 likeTotal 优先；只有它缺失时才退回 like_count（宁可少也别转发当赞）。
+    record.like_count = Number(item.likeTotal ?? 0);
+    record.forward_count = Number(item.fwdnum ?? item.forward_count ?? 0);
     record.like_users = pickLikes(item);
     record.comments = pickComments(item);
+    // 评论正文没抓到时，条数仍然算数（工具的 comment_count 是准的）。
+    record.comment_count = Math.max(Number(item.cmtnum ?? item.comment_count ?? 0), record.comments.length);
     record.post_url = cleanText(item.post_url);
     record.forward_from = cleanText(item.rt_uinname);
     const interactionTimes = record.comments.map((c) => c.created_at).filter((v) => v > 0);
@@ -514,6 +527,8 @@ export function parseQzoneArchive(payload, ownerUin = '') {
     record.like_count = bucket.like_users.length;
     record.like_users = bucket.like_users;
     record.comments = bucket.comments;
+    record.comment_count = bucket.comments.length;
+    record.forward_count = 0;
     record.post_url = cellId && !cellId.startsWith(HISTORY_CELL_PREFIX) && !cellId.startsWith(HISTORY_GUESTBOOK_PREFIX)
       ? `https://user.qzone.qq.com/${ownerUin}/mood/${cellId}`
       : '';
@@ -604,8 +619,15 @@ export function renderChunk(record, { maxComments = 3, maxCommentLen = 40, maxCh
     if (record.recovered) lines.push('[来源] 已删除后从互动残留恢复');
     if (record.location) lines.push(`[位置] ${record.location}`);
     const likeCount = Number(record.like_count ?? 0);
-    if (commentSlice.length || likeCount) {
-      lines.push(`[互动] ${commentSlice.length}条评论 / ${likeCount}个赞`);
+    const commentCount = Math.max(Number(record.comment_count ?? 0), comments.length);
+    const forwardCount = Number(record.forward_count ?? 0);
+    if (commentCount || likeCount || forwardCount) {
+      // 三个数各是各的：赞 / 评论 / 转发。混在一起模型就会说错。
+      const parts = [];
+      if (likeCount) parts.push(`${likeCount}个赞`);
+      if (commentCount) parts.push(`${commentCount}条评论`);
+      if (forwardCount) parts.push(`${forwardCount}次转发`);
+      lines.push(`[互动] ${parts.join(' / ')}`);
     }
     lines.push(`[正文] ${body}`);
     if (commentSlice.length) {
@@ -650,7 +672,8 @@ export function buildChunks(records, options = {}) {
       body_missing: Boolean(record.body_missing),
       year: yearKey(record.published_at),
       like_count: Number(record.like_count ?? 0),
-      comment_count: (record.comments ?? []).length,
+      comment_count: Number(record.comment_count ?? (record.comments ?? []).length),
+      forward_count: Number(record.forward_count ?? 0),
     });
   }
   return chunks;
@@ -706,15 +729,21 @@ export function extractKeywords(texts, limit = 12) {
  * 而不是只能复述检索到的那一两条。
  */
 export function buildProfile(records, summaries = []) {
-  const posts = records.filter((r) => r.kind !== 'guestbook' && (r.content ?? '').trim());
-  if (!posts.length) return null;
+  // 全部说说（含正文未恢复的痕迹）都算数。
+  //
+  // 踩过的坑：早先只统计「有正文」的记录，于是画像写着「共 40 条说说」「已删除后恢复 1 条」，
+  // 而页面上明明显示 85 条、恢复 44 条。模型拿着这份画像说话，自然会跟页面打架。
+  const all = records.filter((r) => r.kind !== 'guestbook');
+  const posts = all.filter((r) => (r.content ?? '').trim());
+  const traces = all.filter((r) => !(r.content ?? '').trim());
+  if (!all.length) return null;
 
-  const timestamps = posts.map((r) => r.published_at).filter((t) => t > 0).sort((a, b) => a - b);
+  const timestamps = all.map((r) => r.published_at).filter((t) => t > 0).sort((a, b) => a - b);
   const from = timestamps.length ? formatTimestamp(timestamps[0], false) : '未知';
   const to = timestamps.length ? formatTimestamp(timestamps[timestamps.length - 1], false) : '未知';
 
   const yearCount = new Map();
-  for (const record of posts) {
+  for (const record of all) {
     const year = record.published_at ? yearKey(record.published_at) : '时间未知';
     yearCount.set(year, (yearCount.get(year) ?? 0) + 1);
   }
@@ -722,13 +751,13 @@ export function buildProfile(records, summaries = []) {
   const peak = ranked[0];
 
   const locationCount = new Map();
-  for (const record of posts) {
+  for (const record of all) {
     if (record.location) locationCount.set(record.location, (locationCount.get(record.location) ?? 0) + 1);
   }
   const topLocations = [...locationCount.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8);
 
   const personCount = new Map();
-  for (const record of posts) {
+  for (const record of all) {
     for (const comment of record.comments ?? []) {
       if (comment.nick) personCount.set(comment.nick, (personCount.get(comment.nick) ?? 0) + 1);
     }
@@ -738,16 +767,22 @@ export function buildProfile(records, summaries = []) {
   const { keywords } = extractKeywords(posts.map((r) => r.content ?? ''));
 
   const lengths = posts.map((r) => (r.content ?? '').length).sort((a, b) => a - b);
-  const average = Math.round(lengths.reduce((a, b) => a + b, 0) / lengths.length);
-  const likeTotal = posts.reduce((sum, r) => sum + Number(r.like_count ?? 0), 0);
-  const commentTotal = posts.reduce((sum, r) => sum + (r.comments ?? []).length, 0);
+  const average = lengths.length ? Math.round(lengths.reduce((a, b) => a + b, 0) / lengths.length) : 0;
+  const likeTotal = all.reduce((sum, r) => sum + Number(r.like_count ?? 0), 0);
+  const commentTotal = all.reduce(
+    (sum, r) => sum + Math.max(Number(r.comment_count ?? 0), (r.comments ?? []).length),
+    0,
+  );
+  const forwardTotal = all.reduce((sum, r) => sum + Number(r.forward_count ?? 0), 0);
   const topPost = posts.reduce(
     (best, r) => (Number(r.like_count ?? 0) > Number(best.like_count ?? 0) ? r : best),
     posts[0],
   );
 
   const lines = [];
-  lines.push(`[跨度] ${from} → ${to}，共 ${posts.length} 条说说`);
+  // 条数要说清楚「有正文多少」和「只有痕迹多少」，别只报一个有正文的口径。
+  const traceNote = traces.length ? `，另有 ${traces.length} 条已删除、正文未恢复` : '';
+  lines.push(`[跨度] ${from} → ${to}，共 ${all.length} 条说说（有正文 ${posts.length} 条${traceNote}）`);
   lines.push(`[年份分布] ${[...yearCount.entries()].sort().map(([y, n]) => `${y} 年 ${n} 条`).join('、')}`);
   if (peak) lines.push(`[最活跃的时期] ${peak[0]} 年，共 ${peak[1]} 条`);
   if (topLocations.length) {
@@ -757,8 +792,12 @@ export function buildProfile(records, summaries = []) {
     lines.push(`[互动最多的人] ${topPeople.map(([name, count]) => `${name}(${count}次)`).join('、')}`);
   }
   if (keywords.length) lines.push(`[反复出现的话题] ${keywords.join('、')}`);
-  lines.push(`[表达习惯] 平均每条 ${average} 字，最长 ${lengths[lengths.length - 1]} 字`);
-  lines.push(`[互动总量] ${likeTotal} 个赞、${commentTotal} 条评论`);
+  if (lengths.length) lines.push(`[表达习惯] 平均每条 ${average} 字，最长 ${lengths[lengths.length - 1]} 字`);
+  const interactionParts = [];
+  if (likeTotal) interactionParts.push(`${likeTotal} 个赞`);
+  if (commentTotal) interactionParts.push(`${commentTotal} 条评论`);
+  if (forwardTotal) interactionParts.push(`${forwardTotal} 次转发`);
+  if (interactionParts.length) lines.push(`[互动总量] ${interactionParts.join('、')}`);
   if (topPost) {
     lines.push(`[最受欢迎的一条] ${truncate(topPost.content, 40)}（${topPost.like_count} 赞）`);
   }
@@ -801,9 +840,16 @@ export function buildProfile(records, summaries = []) {
   if (yearSamples.length) {
     lines.push(`[各年代表原文] ${yearSamples.join('；')}`);
   }
-  const recovered = posts.filter((r) => r.recovered).length;
-  if (recovered) lines.push(`[已删除后恢复] ${recovered} 条`);
-  const undated = posts.filter((r) => !r.published_at).length;
+  const recovered = all.filter((r) => r.recovered).length;
+  if (recovered) {
+    const recoveredNoBody = all.filter((r) => r.recovered && !(r.content ?? '').trim()).length;
+    lines.push(
+      recoveredNoBody
+        ? `[已删除后恢复] ${recovered} 条，其中 ${recoveredNoBody} 条正文未能恢复（只留下发布时间和互动痕迹）`
+        : `[已删除后恢复] ${recovered} 条`,
+    );
+  }
+  const undated = all.filter((r) => !r.published_at).length;
   if (undated) lines.push(`[时间不可考] ${undated} 条`);
 
   const facts = lines.join('\n');
@@ -855,6 +901,7 @@ export function buildYearSummaries(records) {
     const personCount = new Map();
     let totalLikes = 0;
     let totalComments = 0;
+    let totalForwards = 0;
     let recovered = 0;
     let bodyMissing = 0;
     for (const record of group) {
@@ -863,7 +910,9 @@ export function buildYearSummaries(records) {
         if (comment.nick) personCount.set(comment.nick, (personCount.get(comment.nick) ?? 0) + 1);
       }
       totalLikes += Number(record.like_count ?? 0);
-      totalComments += (record.comments ?? []).length;
+      // 评论正文不一定抓到了，但条数是准的——取两者的较大值。
+      totalComments += Math.max(Number(record.comment_count ?? 0), (record.comments ?? []).length);
+      totalForwards += Number(record.forward_count ?? 0);
       if (record.recovered) recovered += 1;
       if (record.body_missing) bodyMissing += 1;
     }
@@ -871,7 +920,12 @@ export function buildYearSummaries(records) {
     const topPeople = [...personCount.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5);
     const title = key === '时间未知' ? '发布时间未知的一组说说' : `${key} 年`;
 
-    let body = `${title}共留下 ${group.length} 条说说，累计 ${totalLikes} 个赞、${totalComments} 条评论。`;
+    const interactionParts = [];
+    if (totalLikes) interactionParts.push(`${totalLikes} 个赞`);
+    if (totalComments) interactionParts.push(`${totalComments} 条评论`);
+    if (totalForwards) interactionParts.push(`${totalForwards} 次转发`);
+    let body = `${title}共留下 ${group.length} 条说说`
+      + (interactionParts.length ? `，累计 ${interactionParts.join('、')}。` : '。');
     if (keywords.length) {
       body += `反复出现的话题关键词：${keywords.join('、')}。`;
     } else if (!confident) {
@@ -903,6 +957,59 @@ export function buildYearSummaries(records) {
 // ---------------------------------------------------------------------------
 // 检索：中文友好的 BM25
 // ---------------------------------------------------------------------------
+
+/**
+ * 全库速览：每条记录一行（日期 + 正文摘录）。
+ *
+ * 检索落空时用它把整个知识库摊给模型——「我是个什么样的人」这种问题
+ * 检索不到任何具体说说，但只要把全库摆出来，模型自己就能答。
+ * 早先的闸门是「检索不到就拒答」，问法一变就答不上，灵活度全丢在这。
+ */
+export function buildKbDigest(records, { maxChars = 60 } = {}) {
+  const lines = [];
+  const sorted = [...records].sort((a, b) => (b.published_at || 0) - (a.published_at || 0));
+  for (const record of sorted) {
+    if (record.kind === 'guestbook') continue;
+    const date = record.published_at ? formatTimestamp(record.published_at, false) : '时间未知';
+    const body = (record.content ?? '').trim();
+    const text = body ? truncate(body, maxChars) : '（已删除，正文未恢复）';
+    const flag = record.recovered ? ' · 已删除后恢复' : '';
+    lines.push(`${date}${flag} · ${text}`);
+  }
+  return lines.join('\n');
+}
+
+/**
+ * 接地校验的对照文本：**整个知识库**。
+ *
+ * 早先只拿「本轮检索到的那几块」当对照，于是模型提到知识库里真实存在、
+ * 但这轮没检索到的东西（比如 2022 年）时会被误判成编造——
+ * 看起来像「知识库里没有」，其实是有。
+ * 事实红线的标准应该是「在知识库里能查到出处」，不是「在这几块里出现过」。
+ */
+export function buildGroundingText(records, summaries = [], profileText = '') {
+  const parts = [];
+  if (profileText) parts.push(String(profileText));
+  for (const summary of summaries) {
+    if (summary?.text) parts.push(String(summary.text));
+  }
+  for (const record of records) {
+    if (record.kind === 'guestbook') continue;
+    const date = record.published_at ? formatTimestamp(record.published_at, false) : '时间未知';
+    const body = (record.content ?? '').trim() || '（已删除，正文未恢复）';
+    const bits = [date, body];
+    if (record.location) bits.push(String(record.location));
+    if (record.like_count) bits.push(`${record.like_count} 个赞`);
+    if (record.comment_count) bits.push(`${record.comment_count} 条评论`);
+    if (record.forward_count) bits.push(`${record.forward_count} 次转发`);
+    for (const comment of record.comments ?? []) {
+      if (comment.content) bits.push(`${comment.nick || '匿名'}：${comment.content}`);
+    }
+    parts.push(bits.join(' '));
+  }
+  return parts.join('\n');
+}
+
 export function tokenize(text) {
   const tokens = [];
   const lower = String(text ?? '').toLowerCase();
@@ -1103,11 +1210,29 @@ function pad2(value) {
 }
 
 /**
+ * 「X 多」型模糊量。
+ *
+ * 中文里「五十多万」说的是一个**区间**（50 万到 60 万之间），不是 500000 这个点。
+ * 模型用它描述 543000 是**准确**的，拿点值去比会误杀一条有据的回答；
+ * 按区间比才对。实测：库里 543000，回答「五十多万」——点值判不过，区间判得过。
+ */
+const VAGUE_DIGIT_RE = /(\d+(?:\.\d+)?)\s*(万|亿|千|[kKwWmM])\s*多/g;
+const VAGUE_CHINESE_RE = /([零一二两三四五六七八九十百千万]+)多/g;
+
+function maskRange(text, start, end) {
+  return text.slice(0, start) + ' '.repeat(Math.max(0, end - start)) + text.slice(end);
+}
+
+/**
  * 文本里的数字事实。只保留量级 ≥ 10 的：个位数噪声太大，
  * 「第 3 条」「一次」「一起」之类不该被判成编造。
+ *
+ * 同时识别「X 多」型模糊量。模糊量按**区间**判，
+ * 并且从点值里抹掉——同一个词既当点又当区间会被判两次。
  */
 function extractNumberFacts(text) {
   const values = new Set();
+  const ranges = [];
   // 先剥掉 URL 和「含字母的长 hex 串」（cell_id 之类）。
   // 不剥的话，cell_id「…3c0500」里的「500」会被当成资料里出现过的数字事实，
   // 于是「我欠了同学 500 块」这种编造能蒙混过关——红线就漏了。
@@ -1116,17 +1241,116 @@ function extractNumberFacts(text) {
     .replace(/https?:\/\/\S+/gi, ' ')
     .replace(/[0-9a-f]{12,}/gi, (m) => (/[a-f]/i.test(m) ? ' ' : m))
     .replace(/[,，]/g, '');
-  for (const match of src.matchAll(/\d+(?:\.\d+)?/g)) {
+
+  // 模糊量先摘出来，并把对应片段从正文里抹掉（留同长空格，位置不变）。
+  let masked = src;
+  for (const match of src.matchAll(VAGUE_DIGIT_RE)) {
+    const scale = NUMBER_UNIT_SCALE[match[2]] ?? NUMBER_UNIT_SCALE[match[2].toLowerCase()];
+    if (!scale) continue;
+    const value = Number(match[1]) * scale;
+    if (!Number.isFinite(value) || value < 10) continue;
+    ranges.push([value, value + scale]);
+    masked = maskRange(masked, match.index, match.index + match[0].length);
+  }
+  for (const match of src.matchAll(VAGUE_CHINESE_RE)) {
+    const raw = match[1];
+    const value = chineseToNumber(raw);
+    if (value === null || value < 10) continue;
+    const last = raw[raw.length - 1];
+    const unitSize = last === '亿' ? 1e8 : last === '万' ? 1e4 : last === '千' ? 1e3 : last === '百' ? 1e2 : 10;
+    ranges.push([value, value + unitSize]);
+    masked = maskRange(masked, match.index, match.index + match[0].length);
+  }
+
+  // 带单位的先算成基准值：「326 万」→ 3260000。
+  // 模型很自然会把 3261887 写成「326 万」，这不是编造，是四舍五入。
+  for (const match of masked.matchAll(/(\d+(?:\.\d+)?)\s*(万|亿|千|[kKwWmM])/g)) {
+    const raw = Number(match[1]);
+    const scale = NUMBER_UNIT_SCALE[match[2]] ?? NUMBER_UNIT_SCALE[match[2].toLowerCase()];
+    if (!scale) continue;
+    const value = raw * scale;
+    if (Number.isFinite(value) && value >= 10) values.add(value);
+  }
+  for (const match of masked.matchAll(/\d+(?:\.\d+)?/g)) {
     const value = Number(match[0]);
     if (Number.isFinite(value) && value >= 10) values.add(value);
   }
-  for (const match of src.matchAll(/[零一二两三四五六七八九十百千万]+/g)) {
+  for (const match of masked.matchAll(/[零一二两三四五六七八九十百千万]+/g)) {
     // 只认带量级的：「一万」「两千」有效；「一」「一起」「十分」不算。
     if (match[0].length < 2 || !/[十百千万]/.test(match[0])) continue;
     const value = chineseToNumber(match[0]);
     if (value !== null && value >= 10) values.add(value);
   }
-  return values;
+  return { values, ranges };
+}
+
+// 数字单位换算表。模型写「326 万」和资料里的「3261887」指的是同一个数。
+const NUMBER_UNIT_SCALE = {
+  万: 1e4,
+  亿: 1e8,
+  千: 1e3,
+  k: 1e3,
+  w: 1e4,
+  m: 1e6,
+};
+
+// 换算后的容差：模型四舍五入到「326 万」，和 3261887 差 0.06%。
+// 2% 覆盖的是「同一个数的粗写」，不是「差一个量级」——
+// 「32 万」和 3261887 差 90%，那是另一个数，该拦。
+const NUMBER_EQUIV_TOLERANCE = 0.02;
+
+/**
+ * 一个已知数字能撑起哪些「同一个数的不同写法」。
+ *
+ * 只有**本身就不小的**已知数才允许再放大一档：
+ * 否则资料里随便一个「50」都会让「50 万」蒙混过关——
+ * 实测就是踩过这个坑：库里有个孤零零的 50，50×1e4=500000，
+ * 于是「五十万」靠它蒙混过关了。规则要严，
+ * 宁可漏放一次巧合，也不能让红线形同虚设。
+ */
+function scaleCandidates(known) {
+  const candidates = [known];
+  if (known >= 1000) candidates.push(known * 1e4, known * 1e8);
+  if (known >= 1e5) candidates.push(known / 1e4);
+  if (known >= 1e9) candidates.push(known / 1e8);
+  return candidates.filter((value) => Number.isFinite(value) && value >= 10);
+}
+
+/**
+ * 回答里的这个数字，在资料里有出处吗？
+ *
+ * 逐字比对太死：「3261887」写成「326 万」会被判成编造，
+ * 于是有据可依的回答被拦下——看起来像「知识库里没有」，其实是有。
+ * 所以按「同一个数的不同写法」来判：单位换算 + 2% 的四舍五入容差。
+ */
+export function numberGrounded(value, ctxNumbers) {
+  if (!Number.isFinite(value)) return true;
+  if (ctxNumbers.has(value)) return true;
+  for (const known of ctxNumbers) {
+    if (!Number.isFinite(known) || known <= 0) continue;
+    for (const candidate of scaleCandidates(known)) {
+      if (Math.abs(value - candidate) / candidate <= NUMBER_EQUIV_TOLERANCE) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * 模糊量区间在资料里有出处吗？
+ *
+ * 「五十多万」= [500000, 600000)，只要资料里有一个数落在这个区间就算有据。
+ * 库里有 543000 → 「五十多万」准确，成立。
+ * 库里有 39 → 「五十多万」不成立，拦。
+ */
+export function rangeGrounded(min, max, ctxNumbers) {
+  if (!Number.isFinite(min) || !Number.isFinite(max) || max <= min) return true;
+  for (const known of ctxNumbers) {
+    if (!Number.isFinite(known) || known <= 0) continue;
+    for (const candidate of scaleCandidates(known)) {
+      if (candidate >= min && candidate < max) return true;
+    }
+  }
+  return false;
 }
 
 /**
@@ -1241,8 +1465,9 @@ function contextNgrams(text) {
  */
 export function factualTokensGrounded(answer, context) {
   const claim = String(answer ?? '');
+  const ctxFacts = extractNumberFacts(context);
   const ctxDates = extractDateFacts(context);
-  const ctxNumbers = extractNumberFacts(context);
+  const ctxNumbers = ctxFacts.values;
   const ctxWords = extractLatinFacts(context);
 
   // 完整日期必须逐字对上
@@ -1276,8 +1501,13 @@ export function factualTokensGrounded(answer, context) {
     if (!ctxDates.days.has(pad2(match[1]))) return false;
   }
   // 数字（金额、人数、点赞数……）
-  for (const value of extractNumberFacts(claim)) {
-    if (!ctxNumbers.has(value)) return false;
+  const claimFacts = extractNumberFacts(claim);
+  for (const value of claimFacts.values) {
+    if (!numberGrounded(value, ctxNumbers)) return false;
+  }
+  // 模糊量按区间判：「五十多万」只要库里有个数落在 50 万到 60 万之间就算有据。
+  for (const [min, max] of claimFacts.ranges) {
+    if (!rangeGrounded(min, max, ctxNumbers)) return false;
   }
   // 外文专名：iPhone、Tesla、Instagram 这类具体事物，资料里没出现过就是编的
   for (const raw of extractLatinProperNouns(claim)) {

@@ -84,20 +84,29 @@ ditto /Applications/WeChat.app.orig /Applications/WeChat.app
 
 ### 修的坑：`sudo chgrp` 报 `Operation not permitted`
 
-令酱实测执行 §3.4 路线 A 时踩到的。**不是 POSIX 权限问题**（sudo 已经拿到 root），
-是 macOS 的 **App 管理（TCC）**在拦——它保护已安装的 app 不被随意改动，连 root 也不放行。
+令酱实测执行 §3.4 改权限路线时踩到的。**不是 POSIX 权限问题**（sudo 已经拿到 root），
+是 macOS 对「**已安装的受保护 app 路径**」单独管控——改它的元数据会被拒，
+而且**改了权限位也不作数**。
 
 本机实测定位到的几件事：
 
 | 事实 | 结论 |
 |---|---|
-| 微信 app 带 `com.apple.macl` 标记 | Apple 的 app 完整性标记 |
-| 该标记**不是** codesign 的拦路虎 | 同一 app 的副本放在 `/Applications` 下，带标记也能 `codesign --force --sign -` 重签成功 |
-| 拦的是「改动已安装 app 本身」 | 副本是新路径、不在已安装 app 记录里 → 放行 |
-| 副本属主 | `lingjiang:admin drwxr-xr-x` → `os.access(W_OK)` 为真 → 工具的权限门直接过 |
-| `ditto` 复制行为 | 复制**整个 bundle** 会保留 `com.apple.macl`；复制单个文件不保留 |
-| `xattr -d com.apple.macl` | 对自己的副本可以删（删不删都能重签） |
-| 普通用户能否在 `/Applications` 写 | 能：mkdir ✅、rename ✅（所以路线 B 的前提成立） |
+| `sudo chgrp admin WeChat.app` | 报 `Operation not permitted`，但**组其实改成了 admin**（返回码仍是 0） |
+| `sudo chmod g+w WeChat.app` | 生效了（权限变 775，组有写位） |
+| `os.access(WeChat.app, W_OK)` | **仍然 False** ← 权限位改了也不作数 |
+| 同一 app 的**副本**放在 `/Applications` 下 | `os.access(W_OK)` = **True**，`codesign --force --sign -` **成功** |
+| `mv` 移动已安装的受保护 app | **成功，不被拦** |
+| `com.apple.macl` 标记 | **不影响** `os.access`，也不影响 `codesign` 重签（带标记的副本照样两项都过）——之前怀疑过它，实测排除 |
+| 副本属主 | `lingjiang:admin drwxr-xr-x` → 属主位可写 → 权限门直接过 |
+| `ditto` 复制行为 | 复制**整个 bundle** 会保留 `com.apple.macl`；复制单个文件则不保留 |
+| 普通用户能否在 `/Applications` 写 | 能：mkdir ✅、rename ✅（所以换副本的前提成立） |
+
+**结论**：真正的分界是「这个**已安装的路径**」本身，换个路径就不受管控。
+所以唯一走得通的路是**换成自己的副本**。
+
+> 这条也纠正了上一版「去系统设置开 App 管理」的说法——那条没实测过，
+> 现在改成只留结论：改权限实测无效。
 
 ### 新突破：`mv` 受保护的已安装 app **不被拦**（路线 A 升为一键脚本）
 
@@ -123,12 +132,11 @@ ditto /Applications/WeChat.app.orig /Applications/WeChat.app
 
 ### 指引相应改写
 
-- 新增 **§2.4 App 管理**：报 `Operation not permitted`（不是 "Permission denied"）就是这个，
-  解法是系统设置 → 隐私与安全性 → **App 管理** → 加上你的终端 → 打开 → 重开终端。
-- §3.4 路线 A 补上「报 EPERM 先去开 App 管理」。
-- §3.4 路线 B 补上实测结论，并标出**唯一未验证的一步**：`mv` 一个已安装的受保护 app
-  可能被 App 管理拦——先单独试这一步，失败就改走路线 A + §2.4。
-- `tools/wx-path-check.py` 的结论段加上错误信息判别。
+- **§2.4 改写**为「为什么『改权限』这条路走不通」：把上面那张实测表放进去，
+  并**撤回**上一版「去系统设置开 App 管理」的说法（那条没实测过）。
+- §3.4 路线 A（换副本）= **唯一实测走得通的路**，给一键脚本。
+- §3.4 路线 B（改权限）降为「实测无效，仅作留档」，并说明它能证明什么。
+- `tools/wx-path-check.py` 的结论段按实测结论重写。
 
 ### 同时改了
 

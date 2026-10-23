@@ -28,6 +28,38 @@ git revert <commit-sha>      # 逐个撤销
 
 ---
 
+## 未发布 — 取数指引补一条「不用 sudo」的备选路径
+
+本机实测了另一条过权限门的办法，写进指引 §3.4。
+
+### 实测
+
+| 事实 | 结论 |
+|---|---|
+| `/Applications` 本身 | `root:admin drwxrwxr-x` → **对 admin 组可写**，所以不用 sudo 也能替换里面的 app 目录 |
+| 复制品的签名 | 与原版**完全一致**：`Identifier=com.tencent.xinWeChat`、`TeamIdentifier=5A4RE8SF68`、CDHash 相同、`codesign --verify --deep --strict` 通过 → 工具的「腾讯原签名」校验能过 |
+| 复制品的属主 | 变成当前用户 → `os.access(WeChat.app, W_OK)` 自然为真 → 权限门直接通过 |
+| 复制方式 | `cp -R` 把 706 MB 展开成 **1.4 GB**；`ditto` 走 APFS 写时复制，**约 3 秒** |
+
+### 做法
+
+```bash
+# 先完全退出微信（⌘Q）
+mv /Applications/WeChat.app /Applications/WeChat.app.orig
+ditto /Applications/WeChat.app.orig /Applications/WeChat.app
+```
+
+原版保留在 `.orig`，随时一条 `mv` 还原。副作用：app 属主变了，**腾讯自动更新器行为未知**，
+抓完密钥后建议还原。
+
+### 同时改了
+
+`tools/wx-path-check.py` 的结论段改成给出**两条路**（A 改权限 / B 换副本），并写清各自的前置与回退。
+
+> 插件代码一行未改。1.0 回归 121 项、2.0 68 项不受影响。
+
+---
+
 ## v2.0.3 — 2026-10-23
 
 **导入按钮按内容认文件；导出全部联系人时，也能挑出你发的那份。**

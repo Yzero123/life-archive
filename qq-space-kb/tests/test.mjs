@@ -19,6 +19,7 @@ import {
   formatTimestamp,
   groundingRatio,
   isConfident,
+  isPlausibleCellId,
   isRecoverTrace,
   isSelfCharacterQuestion,
   mergeRecords,
@@ -289,6 +290,39 @@ check('QQ 号带前导 0 也不误杀自己的内容', () => {
     feeds: [],
   }, OWNER_PADDED);
   assert.equal(mine.length, 1);
+});
+check('cell_id 形态不对的条目不算一条说说', () => {
+  // 真说说 ID 是 24 位十六进制；自己合成的占位 ID 带 history- 前缀
+  assert.equal(isPlausibleCellId(MY_CELL), true);
+  assert.equal(isPlausibleCellId('history-v2:' + 'a'.repeat(32)), true);
+  assert.equal(isPlausibleCellId('history-guestbook:' + 'a'.repeat(8)), true);
+  // 互动中心留言板卡片的哨兵 ID —— 它带的是别人在我留言板上的留言
+  assert.equal(isPlausibleCellId('richinfo'), false);
+  assert.equal(isPlausibleCellId(''), false);
+  assert.equal(isPlausibleCellId('not-a-mood-id'), false);
+});
+check('别人在留言板上的留言不会被当成「我说过的话」', () => {
+  // 旧库踩过的坑：互动中心的留言板卡片用哨兵 cell_id「richinfo」，
+  // 正文是别人在我留言板上的留言。收进来的话，bot 会把别人的话当自己说过。
+  const parsed = parseQzoneArchive({
+    dynamics: [{
+      cell_id: 'richinfo',
+      published_at: TS_2018 + 500,
+      content: '好友戊：以后生个娃儿，不管男女都从小培养他/她拉小提琴。',
+      category: '311',
+      is_history_residue: true,
+    }],
+    feeds: [{
+      cell_id: 'richinfo',
+      event_type: 311,
+      event_time: TS_2018 + 500,
+      actor_name: '好友戊',
+      event_summary: '好友戊：以后生个娃儿，不管男女都从小培养他/她拉小提琴。',
+      feed_key: 'fct_1_311_35_1_1',
+    }],
+  }, OWNER);
+  assert.equal(parsed.length, 0, '留言板留言被收进来了');
+  assert.ok(!parsed.some((r) => String(r.content).includes('拉小提琴')));
 });
 check('QQ 号带前导 0 也能反解发布时间', () => {
   assert.equal(moodCellIdPublishedAt(MY_CELL, OWNER, TS_2018 + 100), TS_2018);

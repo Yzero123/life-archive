@@ -169,10 +169,12 @@ QQ 空间是「回顾」，朋友圈是「当下」。两个数据源性格不�
 **数据从哪来**
 
 插件只认「朋友圈导出 JSON」这一种输入，格式见
-[`微信朋友圈数据契约-2.0.md`](https://github.com/Yzero123/qq-space-kb/blob/main/微信朋友圈数据契约-2.0.md)。
-这个格式**刻意对齐 SIWX 的 JSON 导出**，所以：
+[`微信朋友圈数据契约-2.0.md`](https://github.com/Yzero123/qq-space-kb/blob/main/微信朋友圈数据契约-2.0.md)，
+逐步操作见 [`微信朋友圈取数操作指引.md`](https://github.com/Yzero123/qq-space-kb/blob/main/微信朋友圈取数操作指引.md)。
+这个格式**刻意对齐 SIWX 的 JSON 导出**，同时也兼容 **WeChatDataAnalysis** 的导出形状，所以：
 
 - 用 **SIWX** 导出的 JSON → 直接放进去就能用，零转换；
+- 用 **WeChatDataAnalysis** 导出的 JSON → 同样直接能用（账号标识、时间、正文、位置、缩略图、卡片字段名不同，插件都认）；
 - 用本包自带的取数工具导出的 JSON → 同样直接能用（它只认**已经解开**的 `sns.db`）：
 
 ```bash

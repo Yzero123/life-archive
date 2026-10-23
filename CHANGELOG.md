@@ -162,6 +162,25 @@ native 一旦 attach 成功再失败，可能弄脏调试状态并强制结束�
 不依赖硬编码版本表；本机已确认 `wechat.dylib` 的导入表里确实有 `_CCKeyDerivationPBKDF` ✅
 （LC_UUID `4714EE3E-7227-3ED3-A10F-5E000414AA61`）。
 
+### 新增：prepare 阶段核心两步的预演
+
+用无关 app（`Veee.app`）实跑工具 prepare 阶段最核心的两步，验证副本方案下不会卡：
+
+| 步骤 | 实测结果 |
+|---|---|
+| `clonefile` 把 app 克隆到 `/Applications` | ✅ 成功（写时复制，瞬时） |
+| clone 的属主 | 跟着源走 → 副本方案下 clone 属主是当前用户 → **codesign 不用 sudo**（少一次管理员弹窗） |
+| `codesign --force --preserve-metadata=entitlements --sign -` 签 clone | ✅ 成功，结果正是工具要的「**ad-hoc + 去掉 hardened runtime**」 |
+| 外层重签是否递归 | **不递归** → 内嵌登录 helper 保持腾讯原签名 ✅（工具的 `_has_compatible_in_place_signature` 要求如此） |
+
+### 门 ② 改判：多半不用开「允许附加调试器」
+
+实测 `xcrun lldb -p <微信 pid>` 在**原签名**状态下被拒（`Not allowed to attach to process`）——
+微信是 hardened runtime。但工具 prepare 阶段的重签**会去掉 hardened runtime**，
+所以直接点「获取」很可能就过。
+
+指引 §2.3 从「必做」改成「**多半不用开，被拒了再来**」，并写清被拒时怎么开。
+
 > 插件代码一行未改。1.0 回归 121 项、2.0 68 项不受影响。
 
 ---

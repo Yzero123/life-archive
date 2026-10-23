@@ -105,6 +105,18 @@ function ownerFromCellId(cellId) {
   return value > 0 ? String(value) : null;
 }
 
+/**
+ * 这条记录是不是**我们自己的模板**拼出来的（2.1 的留言 / 点赞）。
+ *
+ * 判据只能看来源标记——不能看正文形状：正文形状会随文案改动而漂移。
+ */
+const WX_GENERATED_SOURCES = new Set(['wechat-sns-comment', 'wechat-sns-like']);
+
+function isGeneratedWxRecord(record) {
+  const sources = Array.isArray(record?.sources) ? record.sources : [];
+  return sources.some((source) => WX_GENERATED_SOURCES.has(source));
+}
+
 function buildFingerprints(records) {
   const qqNumbers = new Set();
   const cellIds = new Set();
@@ -149,9 +161,26 @@ function buildFingerprints(records) {
       const m = String(record.post_url).match(/user\.qzone\.qq\.com\/(\d+)/);
       if (m) qqNumbers.add(m[1]);
     }
-    addText(record.content);
     addText(record.location);
     addLiteral(record.location);
+    // 2.1：留言 / 点赞这两类记录的正文是**我们自己的模板**拼出来的
+    // （「【留言】在…下留言」「【点赞】给…点了赞」）。
+    //
+    // 拿它当指纹，等于把我们自己的话当成了「真实内容」——
+    // 于是回扫器扫包时会撞上包里的同一段模板，自己告自己（自撞误报）。
+    // 2.1 实测：模板里的「我自己的朋友」「的朋友圈点了」三段全被误判成泄漏。
+    //
+    // 正确的指纹来源是**原文**：
+    //   - `user_voice`   = 我的原话（真的我说过的话）
+    //   - `reply_snippet` = 好友原文的截断片段（真的好友写的话）
+    // 两者都进指纹，覆盖度不减；少掉的只有我们自己写的模板文案——
+    // 那本来就不是身份信息。
+    if (isGeneratedWxRecord(record)) {
+      addText(record.user_voice);
+      addText(record.raw?.reply_snippet);
+    } else {
+      addText(record.content);
+    }
     for (const user of record.like_users ?? []) {
       if (typeof user === 'string') { addText(user); addLiteral(user); }
       else if (user) {
@@ -389,6 +418,56 @@ if (wxfp) {
   console.log('  ℹ️ 本机没有导入过朋友圈数据，wxid / 动态 ID 的回扫跳过；'
     + '「包内不许出现 wxid 字面量」的结构性规则照常生效。');
 }
+console.log('');
+
+// ---------------------------------------------------------------------------
+// 1b. 回扫器自检：正样本 + 反样本
+// ---------------------------------------------------------------------------
+// 回扫器自己也要被验，否则改坏了也没人知道。
+//   正样本：拿真实指纹去撞，**必须抓得住**——抓不住，这个门形同虚设。
+//   反样本：我们自己拼的模板文案**不该被抓**——2.1 之前这里会自撞误报。
+console.log('\n[自检] 回扫器正/反样本');
+
+const SELFCHECK_RECORD = {
+  id: 'wx-c-selfcheck-0',
+  ids: ['wx-c-selfcheck-0'],
+  sources: ['wechat-sns-comment'],
+  content: '【留言】在我自己的朋友圈下留言\n原文：「好友写的原文」\n留言：「我自己的原话」',
+  user_voice: '我自己的原话',
+  raw: { reply_snippet: '好友写的原文' },
+  location: '',
+  comments: [],
+  like_users: [],
+  published_at: 1700000000,
+  like_count: 0,
+  comment_count: 0,
+  forward_count: 0,
+};
+const selfFp = buildFingerprints([SELFCHECK_RECORD]);
+
+ok('反样本：我们自己拼的模板文案不进指纹集（2.1 自撞回归）', () => {
+  assert(!selfFp.windows.includes('我自己的朋友'), '模板文案进了指纹集');
+  assert(!selfFp.windows.includes('的朋友圈下了'), '模板文案进了指纹集');
+});
+ok('正样本：我的原话与好友原文仍然进指纹集（覆盖度不能减）', () => {
+  assert(selfFp.windows.includes('我自己的原话'), '我的原话没进指纹集');
+  assert(selfFp.windows.includes('好友写的原文'), '好友原文没进指纹集');
+});
+if (fp.windows.length) {
+  const sample = fp.windows[0];
+  ok('正样本：真实文本片段能被回扫器抓住', () => {
+    const hits = scanText(`这里有一句引用：${sample}`, fp, wxfp);
+    assert(hits.some((h) => h.kind === '真实文本片段' && h.needle === sample), '没抓到');
+  });
+}
+if (fp.nicknames.length) {
+  const sample = fp.nicknames[0];
+  ok('正样本：真实昵称能被回扫器抓住', () => {
+    const hits = scanText(`示例昵称 ${sample}`, fp, wxfp);
+    assert(hits.some((h) => h.kind === '昵称 / 地点' && h.needle === sample), '没抓到');
+  });
+}
+
 console.log('');
 
 const targets = [{ path: PKG_ROOT, label: '包目录' }];

@@ -32,7 +32,7 @@ import {
 const PLUGIN_ID = 'qq-space-kb';
 const PLUGIN_ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const SERVER_NAME = 'qq-space-kb';
-const SERVER_VERSION = '1.4.0';
+const SERVER_VERSION = '2.1.0';
 
 // 单次工具返回的文本上限。知识库原文可能很长，截断后必须说明，
 // 否则调用方会以为资料到此为止。
@@ -145,9 +145,35 @@ const TIME_SOURCE_LABEL = {
 };
 
 let cache = null;
+let cacheSignature = '';
+
+/**
+ * 知识库文件的「指纹」：文件名 + 修改时间 + 大小。
+ *
+ * 为什么需要它：MCP 服务器是**常驻进程**，如果不看文件有没有变，
+ * 就会把第一次读到的知识库一直用下去——
+ * 用户在面板里导入新数据、重新构建了知识库之后，
+ * bot 问出来的还是**重建之前**的旧画像。
+ * 实测踩过：重建后 `kb_profile` 仍返回旧的 `updatedAt`。
+ *
+ * 所以每次取数据前先算一次指纹，变了就重读。
+ */
+function kbSignature() {
+  const parts = [];
+  for (const name of ['chunks.jsonl', 'unified.jsonl', 'summaries.jsonl', 'profile.json']) {
+    try {
+      const stat = statSync(join(KB_DIR, name));
+      parts.push(`${name}:${stat.mtimeMs}:${stat.size}`);
+    } catch {
+      parts.push(`${name}:-`);
+    }
+  }
+  return parts.join('|');
+}
 
 async function loadKnowledgeBase() {
-  if (cache) return cache;
+  const signature = kbSignature();
+  if (cache && cacheSignature === signature) return cache;
   const [chunks, records, summaries, profile] = await Promise.all([
     readJsonl('chunks.jsonl'),
     readJsonl('unified.jsonl'),
@@ -156,6 +182,9 @@ async function loadKnowledgeBase() {
   ]);
   const index = buildIndex(chunks);
   cache = { chunks, records, summaries, profile, index };
+  // 记的是**读之前**的指纹：如果读取过程中文件又被写了，
+  // 下一次调用算出的指纹会跟它不一样，于是会再读一次，不会读到半新半旧的数据。
+  cacheSignature = signature;
   return cache;
 }
 

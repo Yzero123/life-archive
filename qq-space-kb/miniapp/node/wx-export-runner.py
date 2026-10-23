@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sqlite3
 import sys
 import time
@@ -195,18 +196,33 @@ def _parse_card(co, to) -> dict | None:
     return None
 
 
+_BARE_AMP = re.compile(rb"&(?!amp;|lt;|gt;|quot;|apos;|#\d+;|#x[0-9a-fA-F]+;)")
+
+
+def _fix_bare_amp(raw: bytes) -> bytes:
+    """微信生成的 XML **不转义裸 &**。
+
+    公众号文章链接里全是 ``&mid=`` ``&idx=`` ``&sn=``，标准 XML 解析器看到
+    裸 ``&`` 会直接判 not well-formed 然后整条丢掉。
+    实测 1067 行里有 378 行栽在这上面——而且几乎全是带公众号链接的动态，
+    恰恰是内容最值得留的那些。
+
+    只补真正的裸 ``&``，已经转义过的（``&amp;`` ``&#38;`` 等）不动。
+    """
+    return _BARE_AMP.sub(b"&amp;", raw)
+
+
 def parse_timeline(content) -> dict | None:
     """解析 ``SnsTimeLine.content`` 的 XML → 结构化动态。
 
-    容错：实测 5684 条里有 17 条解析不了（特殊字符 / 版本差异），
-    返回 None 让调用方记账，别静默丢。
+    容错：先补裸 ``&`` 再解析；实在解析不了就返回 None 让调用方记账，别静默丢。
     """
     if isinstance(content, str):
         content = content.encode("utf-8", "ignore")
     if not content:
         return None
     try:
-        root = ET.fromstring(content)
+        root = ET.fromstring(_fix_bare_amp(content))
     except ET.ParseError:
         return None
 
@@ -228,8 +244,11 @@ def parse_timeline(content) -> dict | None:
 
     # 互动：LocalExtraInfo 里点赞和评论混在一起，用「有没有内容」区分
     likes, comments = [], []
+    author_name = ""
     extra = root.find("LocalExtraInfo")
     if extra is not None:
+        # LocalExtraInfo.nickname 是**这条动态的作者**的昵称
+        author_name = extra.findtext("nickname") or ""
         for uc in extra.iter("user_comment"):
             item = {
                 "username": uc.findtext("username") or "",
@@ -272,6 +291,7 @@ def parse_timeline(content) -> dict | None:
     return {
         "tid": tid,
         "username": to.findtext("username") or "",
+        "author_name": author_name,
         "source_username": to.findtext("sourceUserName") or "",
         "create_time": create_time,
         "content": to.findtext("contentDesc") or "",
@@ -415,7 +435,14 @@ def _time_text(ts: int) -> str:
     return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(ts))
 
 
-def parse(db_path: Path, owner: str, out_path: Path) -> dict:
+def parse(db_path: Path, owner: str, out_path: Path, scope: str = "mine") -> dict:
+    """把已解密的 sns.db 导成 JSON。
+
+    scope="mine"：只导本人发的朋友圈（2.0 的原始行为，输出形状不变）。
+    scope="all" ：导全部作者的动态，并额外标出**我**在别人朋友圈下的
+                  评论（myComments）和点赞（myLike）。好友的原文只是
+                  上下文，真正进知识库的是「我」说过的话。
+    """
     if not _is_decrypted(db_path):
         raise SystemExit(
             f"{db_path} 还是加密的（文件头不是 SQLite）。\n"
@@ -437,16 +464,21 @@ def parse(db_path: Path, owner: str, out_path: Path) -> dict:
         conn.close()
 
     posts, not_mine, failed = [], 0, 0
+    my_comment_total, my_like_total = 0, 0
     for tid, user_name, content in rows:
-        if owner and user_name != owner:
-            not_mine += 1
-            continue
         feed = parse_timeline(content)
         if feed is None:
             failed += 1
             continue
         created = feed.get("create_time") or 0
-        posts.append({
+        likes = feed.get("likes", [])
+        comments = feed.get("comments", [])
+
+        if scope == "mine" and owner and user_name != owner:
+            not_mine += 1
+            continue
+
+        post = {
             "tid": str(tid),
             "id": str(feed.get("tid") or tid),
             "time": created,
@@ -461,20 +493,44 @@ def parse(db_path: Path, owner: str, out_path: Path) -> dict:
                 {"name": item.get("nickname") or item.get("username") or "",
                  "username": item.get("username") or "",
                  "time": item.get("create_time") or 0}
-                for item in feed.get("likes", [])
+                for item in likes
             ],
             "comments": [
                 {"name": item.get("nickname") or item.get("username") or "",
                  "username": item.get("username") or "",
                  "text": item.get("content") or "",
                  "time": item.get("create_time") or 0}
-                for item in feed.get("comments", [])
+                for item in comments
             ],
             "media": [
                 _public_media(item, index)
                 for index, item in enumerate(feed.get("media", []))
             ],
-        })
+        }
+
+        if scope == "all":
+            mine_comments = [
+                {"name": item.get("nickname") or item.get("username") or "",
+                 # 保留 username：插件要**自己再核对一次**归属，
+                 # 不能全信外部数据里的「这是我的」标记。
+                 "username": item.get("username") or "",
+                 "text": item.get("content") or "",
+                 "time": item.get("create_time") or 0}
+                for item in comments
+                if owner and item.get("username") == owner
+            ]
+            mine_likes = [
+                item for item in likes if owner and item.get("username") == owner
+            ]
+            post["authorName"] = feed.get("author_name") or ""
+            post["myLike"] = bool(mine_likes)
+            # 点赞时间（like_user_list 里带 create_time）
+            post["myLikeTime"] = (mine_likes[0].get("create_time") or 0) if mine_likes else 0
+            post["myComments"] = mine_comments
+            my_comment_total += len(mine_comments)
+            my_like_total += 1 if mine_likes else 0
+
+        posts.append(post)
 
     posts.sort(key=lambda item: item.get("time") or 0)
 
@@ -487,6 +543,7 @@ def parse(db_path: Path, owner: str, out_path: Path) -> dict:
             "format": "json",
             # 标明生产者：插件解析器不挑，但排查问题时得知道这份 JSON 是谁产的
             "source": "qq-space-kb-wx-runner",
+            "scope": scope,
             "range": {
                 "start": min(times) if times else 0,
                 "end": max(times) if times else 0,
@@ -500,6 +557,9 @@ def parse(db_path: Path, owner: str, out_path: Path) -> dict:
         },
         "posts": posts,
     }
+    if scope == "all":
+        payload["meta"]["myComments"] = my_comment_total
+        payload["meta"]["myLikes"] = my_like_total
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     return payload
@@ -513,6 +573,10 @@ def main(argv=None) -> int:
     p_parse.add_argument("--db", default="", help="已解密的 sns.db 路径（不给就自动找）")
     p_parse.add_argument("--owner", default="", help="账号 wxid（不给就按目录名推断）")
     p_parse.add_argument("--out", default="", help="输出 JSON 路径")
+    p_parse.add_argument(
+        "--scope", default="mine", choices=["mine", "all"],
+        help="mine=只导本人发的（默认）；all=导全部作者，并标出我在别人朋友圈下的评论与点赞",
+    )
 
     p_discover = sub.add_parser("discover", help="列出本机候选的 sns.db")
     p_discover.add_argument("--json", action="store_true", help="按 JSON 输出")
@@ -534,11 +598,14 @@ def main(argv=None) -> int:
     out = Path(args.out).expanduser() if args.out else Path.cwd() / "wechat_sns.json"
     db_path = pick_db(args.db or None)
     owner = pick_owner(db_path, args.owner or None)
-    payload = parse(db_path, owner, out)
+    payload = parse(db_path, owner, out, scope=args.scope)
     stats = payload["meta"]["stats"]
     print(f"✅ 导出 {stats['kept']} 条朋友圈 → {out}")
     print(f"   表内共 {stats['rows_in_table']} 条；不是我的 {stats['not_mine']} 条；"
           f"解析失败 {stats['parse_failed']} 条")
+    if args.scope == "all":
+        print(f"   其中我在别人朋友圈下评论 {payload['meta'].get('myComments', 0)} 条、"
+              f"点赞 {payload['meta'].get('myLikes', 0)} 次")
     print("   把这个文件交给插件的「微信朋友圈」面板导入即可。")
     return 0
 

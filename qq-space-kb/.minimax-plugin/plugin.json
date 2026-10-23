@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "name": "qq-space-kb",
   "displayName": "QQ 空间说说知识库",
-  "version": "1.5.0",
+  "version": "1.6.0",
   "description": "导出你的 QQ 空间历史说说（含已删除后恢复的内容），建成可检索的知识库，并归纳出一份人物画像。聊天时只依据知识库里的真实记录作答，查不到就回答「当时的我还不知道这是什么意思」，绝不编造。附带 MCP 检索工具、人物画像子代理与年份分布可视化技能，可直接在对话里使用知识库。",
   "author": "MiniMax",
   "icon": "icon.png",

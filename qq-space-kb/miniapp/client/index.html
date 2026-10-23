@@ -151,6 +151,34 @@
 
       .empty { color: var(--mcode-text-subtle); font-size: 13px; padding: 24px 0; text-align: center; }
       .hint { font-size: 12px; color: var(--mcode-text-subtle); margin-top: 6px; }
+
+      .session {
+        margin-top: 12px;
+        padding: 10px 14px;
+        border: 1px solid var(--mcode-border);
+        border-radius: 12px;
+        background: var(--mcode-surface-muted);
+      }
+      .session[data-state='ready'] { border-color: var(--mcode-success); }
+      .session[data-state='waiting'] { border-color: var(--mcode-warning); }
+      .session-line {
+        margin: 0;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 13px;
+        color: var(--mcode-text);
+      }
+      .session-dot {
+        flex: none;
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: var(--mcode-text-subtle);
+      }
+      .session[data-state='ready'] .session-dot { background: var(--mcode-success); }
+      .session[data-state='waiting'] .session-dot { background: var(--mcode-warning); }
+      .session[data-state='off'] .session-dot { background: var(--mcode-danger); }
       .note {
         margin: 12px 0 0;
         font-size: 12px;
@@ -241,7 +269,16 @@
         </div>
         <p class="hint">
           导出会打开 QQ 空间登录页，需要你本人用手机 QQ 扫码。抓取过程请勿切换 QQ 客户端账号，否则有封号风险。
+          整个流程只需要扫一次码（导出和回溯共用同一个浏览器），请不要关掉弹出的浏览器窗口。
         </p>
+
+        <div class="session" id="session-box" data-state="off" hidden>
+          <p class="session-line">
+            <span class="session-dot" aria-hidden="true"></span>
+            <span id="session-text">登录会话未启动</span>
+          </p>
+          <p class="hint" id="session-hint"></p>
+        </div>
 
         <div id="permission-box" class="permission" hidden>
           <h3 id="perm-title">需要你的授权</h3>
@@ -355,6 +392,9 @@
           btnPersona: document.getElementById('btn-persona'),
           btnAllow: document.getElementById('btn-allow'),
           btnDeny: document.getElementById('btn-deny'),
+          sessionBox: document.getElementById('session-box'),
+          sessionText: document.getElementById('session-text'),
+          sessionHint: document.getElementById('session-hint'),
         };
 
         var PHASE_TEXT = {
@@ -382,6 +422,48 @@
           if (node) node.setAttribute('data-state', state);
         }
 
+        /**
+         * 显示导出登录会话的状态。
+         *
+         * 用户最怕的是「又要重扫一次」，所以这里把三件事讲清楚：
+         * 浏览器还活着吗、登录态就绪了吗、接下来要不要再扫码。
+         */
+        function renderSession(session) {
+          if (!session) {
+            el.sessionBox.hidden = true;
+            return;
+          }
+          el.sessionBox.hidden = false;
+          var text = '';
+          var hint = '';
+          var tone = 'off';
+
+          if (session.browserAlive && session.loginReady) {
+            tone = 'ready';
+            text = '登录会话保持中：全程只需要扫码一次，回溯已删除说说也不用再扫。';
+            hint = '请不要关掉那个 QQ 空间浏览器窗口，关掉后登录态会失效。';
+          } else if (session.browserAlive) {
+            tone = 'waiting';
+            text = session.state === 'exporting'
+              ? '浏览器已登录，正在抓取说说。'
+              : '浏览器已打开，等你扫码登录 QQ 空间。';
+            hint = '扫码之后还要在手机 QQ 上点「确认登录」，两步都做完才会下发会话。';
+          } else {
+            tone = 'off';
+            text = '导出浏览器已关闭，登录态已失效。';
+            hint = '再点一次「开始导出」会重新拉起浏览器，扫码一次即可继续。';
+          }
+
+          if (session.error) {
+            text = '导出中断：' + session.error;
+            hint = '浏览器如果还开着，可以直接在里面补扫一次，不用重启任何东西。';
+          }
+
+          el.sessionBox.setAttribute('data-state', tone);
+          el.sessionText.textContent = text;
+          el.sessionHint.textContent = hint;
+        }
+
         function renderState(state) {
           el.phase.textContent = '状态：' + (PHASE_TEXT[state.phase] || state.phase);
           if (state.message) {
@@ -399,6 +481,8 @@
           setStep('export', state.exporting ? 'active' : state.hasMessages ? 'done' : 'idle');
           setStep('build', state.phase === 'building' ? 'active' : state.stats && state.stats.chunkCount ? 'done' : 'idle');
           setStep('ready', state.phase === 'ready' ? 'done' : 'idle');
+
+          renderSession(state.exportSession);
 
           if (state.pendingPermission) {
             el.permBox.hidden = false;

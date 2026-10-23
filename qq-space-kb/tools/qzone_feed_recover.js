@@ -18,16 +18,18 @@
  * 硬要求（踩过的坑）：
  *   1. 必须用**系统 Chrome**（Playwright 自带的 chromium 本机往往没装），
  *      launchPersistentContext 要显式传 executablePath。
- *   2. 必须等抓取脚本完全退出后再跑：同一个 user-data-dir 不能被两个 Chrome 同时打开。
+ *   2. 默认路径下必须等抓取脚本完全退出后再跑：同一个 user-data-dir 不能被两个 Chrome 同时打开。
  *   3. QQ 空间的 uin / p_skey 是**会话 cookie**，浏览器一关就没了，
- *      持久化 profile 里留不住 —— 必须在本窗口里再登一次（用户扫码）。
+ *      持久化 profile 里留不住 —— 默认路径下必须在本窗口里再登一次（用户扫码）。
+ *      **用 --cdp 挂到常驻浏览器上就没有这个问题**：登录态是现成的，一次都不用再扫。
  *   4. 这个接口要**桌面端**会话：页面要先停在 user.qzone.qq.com，
  *      在页面里 fetch（同源）才不会被 CORS 掐掉。count 必须 ≤ 30，再大就返回空。
  *
  * 用法：
  *   node qzone_feed_recover.js --target-qq <QQ号> --shuoshuo <messages.json> --out <qzone_archive.json>
  *                                [--tool-dir <导出工具目录>] [--profile-dir <chrome-profile 目录>]
- *                                [--work-dir <工作目录>] [--login-timeout 900] [--max-pages 20]
+ *                                [--cdp <常驻浏览器的 CDP 端点>] [--work-dir <工作目录>]
+ *                                [--login-timeout 900] [--max-pages 20]
  *
  * 依赖：playwright（用导出工具自己的 node_modules）+ 系统 Chrome。
  *   NODE_PATH=<导出工具目录>/node_modules node qzone_feed_recover.js ...
@@ -57,6 +59,8 @@ function parseArgs(argv) {
     // 默认是 get-qzone-history 的标准布局，换工具时用命令行覆盖。
     toolDir: TOOL_DIR_DEFAULT,
     profileDir: '',
+    // 常驻浏览器的 CDP 端点。给了就挂上去复用登录态，不需要再扫码。
+    cdp: '',
   };
   for (let i = 0; i < argv.length; i += 1) {
     const v = argv[i];
@@ -66,6 +70,7 @@ function parseArgs(argv) {
     else if (v === '--work-dir' && argv[i + 1]) args.workDir = argv[++i];
     else if (v === '--tool-dir' && argv[i + 1]) args.toolDir = argv[++i];
     else if (v === '--profile-dir' && argv[i + 1]) args.profileDir = argv[++i];
+    else if (v === '--cdp' && argv[i + 1]) args.cdp = String(argv[++i]).trim();
     else if (v === '--login-timeout' && argv[i + 1]) args.loginTimeout = Number(argv[++i]);
     else if (v === '--max-pages' && argv[i + 1]) args.maxPages = Number(argv[++i]);
   }
@@ -436,7 +441,8 @@ async function main() {
     console.error('缺少 --target-qq');
     return 2;
   }
-  if (!fs.existsSync(PROFILE_DIR)) {
+  // CDP 模式下浏览器是外部起的（常驻会话），本地 profile 由那边管，这里不检查。
+  if (!args.cdp && !fs.existsSync(PROFILE_DIR)) {
     console.error('找不到 chrome-profile：%s', PROFILE_DIR);
     return 3;
   }
@@ -452,12 +458,42 @@ async function main() {
   }
   console.log('说说列表 tid 数量：%d', shuoshuoTids.size);
 
-  const context = await chromium.launchPersistentContext(PROFILE_DIR, {
-    headless: false,
-    executablePath: chromePath(),
-    viewport: { width: 1440, height: 900 },
-    args: ['--no-first-run', '--no-default-browser-check'],
-  });
+  // 浏览器有两种拿法：
+  //  - --cdp：挂到**常驻会话**的浏览器上，复用它已经登录好的会话（全程只扫一次码）。
+  //    实测 Playwright 在 CDP 连接下调用 browser.close() 只断开客户端，Chrome 进程不受影响。
+  //  - 默认：自己开一个持久化 profile（老路径，需要在这个窗口里再登一次）。
+  let browser = null;
+  let context = null;
+  if (args.cdp) {
+    console.log('挂到常驻浏览器：%s（复用已有登录态，不需要再扫码）', args.cdp);
+    try {
+      browser = await chromium.connectOverCDP(args.cdp);
+    } catch (error) {
+      // 常驻浏览器被关掉了，或端口没开。
+      // 这里必须说清楚：**不能默默退回自己开浏览器**——那会变成「又要重新扫码」，
+      // 正是这次改造要消灭的行为。
+      console.error(
+        '连不上常驻浏览器（CDP 端点 %s）：%s\n' +
+        '常驻浏览器多半已经被关掉了，登录态随之失效。\n' +
+        '要继续的话：点一次「开始导出」重新拉起浏览器，扫码一次即可（全程仍然只需一次）。',
+        args.cdp,
+        String(error && error.message ? error.message : error),
+      );
+      return 4;
+    }
+    context = browser.contexts()[0];
+    if (!context) {
+      console.error('CDP 连上了但没找到浏览器上下文：%s', args.cdp);
+      return 5;
+    }
+  } else {
+    context = await chromium.launchPersistentContext(PROFILE_DIR, {
+      headless: false,
+      executablePath: chromePath(),
+      viewport: { width: 1440, height: 900 },
+      args: ['--no-first-run', '--no-default-browser-check'],
+    });
+  }
   const page = context.pages()[0] || (await context.newPage());
 
   const report = { probes: [], cards: [], errors: [], extra: [] };
@@ -676,7 +712,12 @@ async function main() {
     writeJson(path.join(args.workDir, 'feed-raw-dump.json'), report);
     console.error('回溯探针出错：%s', String(error));
   } finally {
-    await context.close().catch(() => {});
+    if (browser) {
+      // CDP 模式：只断开 Playwright 客户端，常驻浏览器继续活着，登录态不丢。
+      await browser.close().catch(() => {});
+    } else {
+      await context.close().catch(() => {});
+    }
   }
   return 0;
 }

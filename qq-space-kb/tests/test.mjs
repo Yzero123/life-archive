@@ -664,6 +664,15 @@ try {
     assert.equal(state0.hasArchive, true);
   });
 
+  check('状态里带导出会话字段（页面要显示「只扫一次」）', () => {
+    assert.ok('exportSession' in state0, 'state 里没有 exportSession 字段');
+    // 还没导出过导出流程时它应该是 null；有流程时必须带 browserAlive / loginReady
+    if (state0.exportSession !== null) {
+      assert.ok('browserAlive' in state0.exportSession);
+      assert.ok('loginReady' in state0.exportSession);
+    }
+  });
+
   const built = await call('/api/kb/build', {
     method: 'POST',
     body: JSON.stringify({ ownerUin: OWNER, persona: '说话简短直接。' }),

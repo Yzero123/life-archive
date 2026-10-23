@@ -39,6 +39,7 @@ import {
 
 import {
   countBySource,
+  mergeWechatSnsPayload,
   parseWechatSns,
   stripDeviceSuffix,
 } from './wxsns.mjs';
@@ -1148,13 +1149,21 @@ export async function importWx(runtime, body, options = {}) {
     };
   }
 
-  await store.writeRaw('wechat_sns.json', payload);
-  const owner = probe.stats.owner || '';
+  // 本地 sns.db 的朋友圈缓存窗口是会滑动的：这次导出的可能只是最近一批，
+  // 和上次导出的既有重叠也有新增。**必须合并而不是覆盖**——
+  // 覆盖会把之前攒下的记录抹掉，历史永远攒不齐。
+  const existing = await store.readRaw('wechat_sns.json');
+  const merge = mergeWechatSnsPayload(payload, existing);
+  await store.writeRaw('wechat_sns.json', merge.payload);
+
+  // 合并完重新数一遍，最终入库多少条以合并后的结果为准。
+  const final = parseWechatSns(merge.payload, { ownerWxid: forcedOwner });
+  const owner = final.stats.owner || probe.stats.owner || '';
   await store.saveState({
     wx: {
       enabled: true,
       imported: true,
-      count: probe.stats.kept,
+      count: final.stats.kept,
       owner,
       source: sourcePath === 'inline' ? 'inline' : 'file',
       importedAt: Date.now(),
@@ -1162,11 +1171,13 @@ export async function importWx(runtime, body, options = {}) {
   });
   return {
     ok: true,
-    count: probe.stats.kept,
-    total: probe.stats.total,
-    notMine: probe.stats.notMine,
+    count: final.stats.kept,
+    total: final.stats.total,
+    notMine: final.stats.notMine,
     owner,
     file: sourcePath === 'inline' ? 'inline' : basename(sourcePath),
+    merged: merge.merged,
+    added: merge.added,
     needRebuild: true,
   };
 }

@@ -415,3 +415,52 @@ export function countBySource(records) {
   }
   return Object.fromEntries(counts);
 }
+
+/**
+ * 合并两次导出的朋友圈数据，按动态 id 去重。
+ *
+ * 为什么必须合并而不是覆盖：
+ * 朋友圈历史在微信服务端，本地 sns.db 只保留一个**会滑动的缓存窗口**。
+ * 今天导一次是 34 条，三个月后窗口滑走再导一次，可能只剩最近那几条——
+ * 如果直接覆盖，之前攒下的记录就被抹掉了，历史永远攒不齐。
+ * 合并之后，每次导入都只增不减，窗口滑到哪里就攒到哪里。
+ *
+ * 同 id 的记录取「后来的那份」：点赞数、评论这些是会变的。
+ */
+export function mergeWechatSnsPayload(incoming, existing) {
+  const inPosts = Array.isArray(incoming?.posts) ? incoming.posts : [];
+  const exPosts = Array.isArray(existing?.posts) ? existing.posts : [];
+  if (!inPosts.length) {
+    return { payload: incoming, added: 0, total: inPosts.length, merged: false };
+  }
+  if (!exPosts.length) {
+    return { payload: incoming, added: inPosts.length, total: inPosts.length, merged: false };
+  }
+
+  const keyOf = (post) => String(post?.id ?? post?.tid ?? '').trim();
+  // 时间字段名不统一：契约形状用 time，工具导出用 createTime，还可能是 create_time / ts。
+  // 排序只决定展示顺序，所以这里只要能比大小就行，毫秒要折成秒。
+  const timeOf = (post) => {
+    const raw = post?.time ?? post?.create_time ?? post?.createTime ?? post?.ts;
+    const n = Number(raw);
+    if (!Number.isFinite(n) || n === 0) return 0;
+    return n > 1e11 ? Math.floor(n / 1000) : n;
+  };
+  const byId = new Map();
+  for (const post of exPosts) {
+    const key = keyOf(post);
+    if (key) byId.set(key, post);
+  }
+
+  let added = 0;
+  for (const post of inPosts) {
+    const key = keyOf(post);
+    if (!key) continue;
+    if (!byId.has(key)) added += 1;
+    byId.set(key, post);
+  }
+
+  const posts = [...byId.values()].sort((a, b) => timeOf(b) - timeOf(a));
+  const payload = { ...existing, ...incoming, posts, postCount: posts.length };
+  return { payload, added, total: posts.length, merged: true };
+}

@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "mcpServers": {
+    "life-archive": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["./mcp/kb-mcp.mjs"],
+      "env": {},
+      "description": "读取 人生档案：统计、检索、原始记录、人物画像、接地校验。只做确定性检索，不调用大模型。",
+      "timeout": 30000
+    }
+  }
+}

@@ -1,6 +1,7 @@
-# QQ 空间说说知识库
+# 人生档案
 
-把 QQ 空间的全部历史说说（含已删除后恢复的内容）变成一个**能对话的知识库**。
+把你在社交平台发过的那些东西——QQ 空间历史说说（含已删除后恢复的内容）、
+自己发的微信朋友圈动态、在别人朋友圈下留的言、点过的赞——变成一个**能对话的知识库**。
 
 导出 → 建库 → 归纳人物画像 → 按人设对话。**回答必须有知识库依据**，
 资料不足以回答就回答「当时我还不知道这是什么意思」，不编造。
@@ -8,7 +9,9 @@
 这是一个 [Mini App](https://agent.minimax.cn/docs/miniapp/overview) 包，
 可以在 MiniMax Code（MCode）里直接安装使用。
 
-> 当前版本 **v2.1.0**。
+> 当前版本 **v3.0.0**。
+> **第一次看这个项目**（尤其是来审核的）：从 [`交接说明.md`](交接说明.md) 入手——
+> 那里有代码地图、测试清单、关键口径、脱敏机制和给审核者的检查清单。
 > 完整版本历史见 [`CHANGELOG.md`](CHANGELOG.md)；
 > 想回退到任意旧版，见 [版本历史与回退](#版本历史与回退)。
 
@@ -20,23 +23,23 @@
 
 **方式一：直接导入 zip**（推荐给不想折腾 git 的人）
 
-下载 [`releases/qq-space-kb-2.1.0.zip`](releases/qq-space-kb-2.1.0.zip)，
+下载 [`releases/life-archive-3.0.0.zip`](releases/life-archive-3.0.0.zip)，
 在 MCode 里安装 Mini App 时选择这个包。
 
-> 想要旧版？[Releases 页面](https://github.com/Yzero123/qq-space-kb/releases)有全部历史版本的 zip。
+> 想要旧版？[Releases 页面](https://github.com/Yzero123/life-archive/releases)有全部历史版本的 zip。
 
 **方式二：clone 后本地安装**
 
 ```bash
-git clone https://github.com/Yzero123/qq-space-kb.git
-# 把 qq-space-kb/ 目录作为 Mini App 安装，或复制进 ~/.minimax/plugins/
+git clone https://github.com/Yzero123/life-archive.git
+# 把 life-archive/ 目录作为 Mini App 安装，或复制进 ~/.minimax/plugins/
 ```
 
 ### 2. 导出你自己的说说
 
 在 MCode 里对 Agent 说：
 
-> 打开我的 QQ 空间说说知识库，导出历史说说并建库。
+> 打开我的 人生档案，导出历史说说并建库。
 
 会弹出一个 QQ 空间浏览器窗口，**你用手机 QQ 扫码**完成登录（这一步只能你本人做），
 然后抓取全量说说、评论、点赞、定位和图片。抓取过程很慢（每页间隔 20 秒，每 10 页休息 3 分钟），
@@ -118,8 +121,8 @@ git clone https://github.com/Yzero123/qq-space-kb.git
   拷贝了完整的 GenUI 基础并记录来源摘要。它不自己取数，只消费业务流已经算好的统计；
   数据不足或接地校验判「知识库里没有」时一律走文字版。
 
-细节和踩过的坑见 [`qq-space-kb/README.md`](qq-space-kb/README.md)（包内文档）
-和 [`QQ空间说说知识库方案.md`](QQ空间说说知识库方案.md)（方案与工程复盘）。
+细节和踩过的坑见 [`life-archive/README.md`](life-archive/README.md)（包内文档）
+和 [`人生档案方案.md`](人生档案方案.md)（方案与工程复盘）。
 
 > **2.1 已发布**：朋友圈互动也纳进来了——**你在别人朋友圈下留的言、你点过的赞**，
 > 同样是「过去的你」。好友的原文只作上下文，**永远不算成「我说的话」**。
@@ -155,37 +158,37 @@ git clone https://github.com/Yzero123/qq-space-kb.git
 
 | 版本 | 日期 | 一句话 | 安装包 |
 |---|---|---|---|
-| v2.1.0 | 2026-10-23 | 朋友圈互动扩展：我的留言与我的点赞也进库，好友原文只作上下文 | [zip](releases/qq-space-kb-2.1.0.zip) |
-| v2.0.7 | 2026-10-23 | 导入改「合并」：滑动的缓存窗口能一点一点攒成全量 | [zip](releases/qq-space-kb-2.0.7.zip) |
-| v2.0.6 | 2026-10-23 | 查清朋友圈条数上限：34 条是本地窗口内的全部 | [zip](releases/qq-space-kb-2.0.6.zip) |
-| v2.0.5 | 2026-10-23 | 修正条数口径（5 → 34），补「条数对不上就重导」 | [zip](releases/qq-space-kb-2.0.5.zip) |
-| v2.0.4 | 2026-10-23 | 隐私回扫误报修复：退化值不再当指纹 | [zip](releases/qq-space-kb-2.0.4.zip) |
-| v2.0.3 | 2026-10-23 | 导入按钮按内容认文件，导出全部联系人时也能挑出你发的那份 | [zip](releases/qq-space-kb-2.0.3.zip) |
-| v2.0.2 | 2026-10-23 | 归一化器支持 WeChatDataAnalysis 的导出形状 | [zip](releases/qq-space-kb-2.0.2.zip) |
-| v2.0.1 | 2026-10-23 | 文档事实修正：SIP 只挡 SIWX，不挡 WeChatDataAnalysis | [zip](releases/qq-space-kb-2.0.1.zip) |
-| v2.0.0 | 2026-10-23 | 微信朋友圈历史接入：双源画像，朋友圈数据源默认关 | [zip](releases/qq-space-kb-2.0.0.zip) |
-| v1.7.1 | 2026-10-23 | 版本管理：CHANGELOG + 隐私回扫脚本 + 修文档示例泄漏 | [zip](releases/qq-space-kb-1.7.1.zip) |
-| v1.7.0 | 2026-10-23 | 对话架构：知识库整体当 prompt | [zip](releases/qq-space-kb-1.7.0.zip) |
-| v1.6.2 | 2026-10-23 | 留言板留言不再被当成「我发过的说说」 | [zip](releases/qq-space-kb-1.6.2.zip) |
-| v1.6.1 | 2026-10-23 | 按钮挪进面板，状态栏按真实状态显示 | [zip](releases/qq-space-kb-1.6.1.zip) |
-| v1.6.0 | 2026-10-23 | 全程只扫一次码 | [zip](releases/qq-space-kb-1.6.0.zip) |
-| v1.5.0 | 2026-10-22 | 年份分布可视化技能 | [zip](releases/qq-space-kb-1.5.0.zip) |
-| v1.4.0 | 2026-10-22 | 插件化：MCP 工具 + 技能 + 人设子代理 | [zip](releases/qq-space-kb-1.4.0.zip) |
-| v1.3.0 | 2026-10-22 | 第一个版本 | [zip](releases/qq-space-kb-1.3.0.zip) |
+| v2.1.0 | 2026-10-23 | 朋友圈互动扩展：我的留言与我的点赞也进库，好友原文只作上下文 | [zip](releases/life-archive-2.1.0.zip) |
+| v2.0.7 | 2026-10-23 | 导入改「合并」：滑动的缓存窗口能一点一点攒成全量 | [zip](releases/life-archive-2.0.7.zip) |
+| v2.0.6 | 2026-10-23 | 查清朋友圈条数上限：34 条是本地窗口内的全部 | [zip](releases/life-archive-2.0.6.zip) |
+| v2.0.5 | 2026-10-23 | 修正条数口径（5 → 34），补「条数对不上就重导」 | [zip](releases/life-archive-2.0.5.zip) |
+| v2.0.4 | 2026-10-23 | 隐私回扫误报修复：退化值不再当指纹 | [zip](releases/life-archive-2.0.4.zip) |
+| v2.0.3 | 2026-10-23 | 导入按钮按内容认文件，导出全部联系人时也能挑出你发的那份 | [zip](releases/life-archive-2.0.3.zip) |
+| v2.0.2 | 2026-10-23 | 归一化器支持 WeChatDataAnalysis 的导出形状 | [zip](releases/life-archive-2.0.2.zip) |
+| v2.0.1 | 2026-10-23 | 文档事实修正：SIP 只挡 SIWX，不挡 WeChatDataAnalysis | [zip](releases/life-archive-2.0.1.zip) |
+| v2.0.0 | 2026-10-23 | 微信朋友圈历史接入：双源画像，朋友圈数据源默认关 | [zip](releases/life-archive-2.0.0.zip) |
+| v1.7.1 | 2026-10-23 | 版本管理：CHANGELOG + 隐私回扫脚本 + 修文档示例泄漏 | [zip](releases/life-archive-1.7.1.zip) |
+| v1.7.0 | 2026-10-23 | 对话架构：知识库整体当 prompt | [zip](releases/life-archive-1.7.0.zip) |
+| v1.6.2 | 2026-10-23 | 留言板留言不再被当成「我发过的说说」 | [zip](releases/life-archive-1.6.2.zip) |
+| v1.6.1 | 2026-10-23 | 按钮挪进面板，状态栏按真实状态显示 | [zip](releases/life-archive-1.6.1.zip) |
+| v1.6.0 | 2026-10-23 | 全程只扫一次码 | [zip](releases/life-archive-1.6.0.zip) |
+| v1.5.0 | 2026-10-22 | 年份分布可视化技能 | [zip](releases/life-archive-1.5.0.zip) |
+| v1.4.0 | 2026-10-22 | 插件化：MCP 工具 + 技能 + 人设子代理 | [zip](releases/life-archive-1.4.0.zip) |
+| v1.3.0 | 2026-10-22 | 第一个版本 | [zip](releases/life-archive-1.3.0.zip) |
 
 每个版本都有 **Git tag**（`v1.x.y`）和 **GitHub Release**
-（<https://github.com/Yzero123/qq-space-kb/releases>，zip 作为资产挂着）。
+（<https://github.com/Yzero123/life-archive/releases>，zip 作为资产挂着）。
 
 **三种回退方式，按场景选：**
 
 ```bash
 # 1. 只想要某个旧版的安装包
 #    → Releases 页面下载对应 zip，在 MCode 里重新安装即可
-#    https://github.com/Yzero123/qq-space-kb/releases
+#    https://github.com/Yzero123/life-archive/releases
 
 # 2. 想把源码切回某个版本（改代码、做对比）
-git clone https://github.com/Yzero123/qq-space-kb.git
-cd qq-space-kb
+git clone https://github.com/Yzero123/life-archive.git
+cd life-archive
 git checkout v1.6.2          # 切到旧版
 git checkout main            # 切回来
 
@@ -201,7 +204,7 @@ git revert <commit-sha>      # 逐个撤销
 ## 目录结构
 
 ```
-qq-space-kb/
+life-archive/
 ├── README.md                    # 包内文档：安装、使用、架构、常见问题
 ├── .minimax-plugin/plugin.json  # Mini App 插件声明
 ├── miniapp/
@@ -212,32 +215,34 @@ qq-space-kb/
 ├── servers.mcp.json             # MCP 服务声明（stdio，零依赖）
 ├── mcp/kb-mcp.mjs               # MCP 服务器：统计 / 检索 / 画像 / 接地校验
 ├── skills/
-│   ├── qq-space-kb/SKILL.md     # 业务技能：整套操作规程
-│   └── qq-space-kb-visualizer/  # 派生可视化技能（用户自有，含完整 GenUI 基础拷贝）
-├── agents/qzone-persona.md      # 人设子代理
+│   ├── life-archive/SKILL.md     # 业务技能：整套操作规程
+│   └── life-archive-visualizer/  # 派生可视化技能（用户自有，含完整 GenUI 基础拷贝）
+├── agents/past-self-persona.md      # 人设子代理
 ├── tools/
 │   ├── qzone_session.js         # 常驻浏览器会话管理器（一次扫码的关键）
 │   └── qzone_feed_recover.js    # 已删除说说回溯探针（实测可用）
 └── tests/
     ├── test.mjs                 # 121 项回归断言
-    ├── test-wx.mjs              # 2.0：56 项断言（含 1.0 逐字节回归锁）
+    ├── test-wx.mjs              # 朋友圈：89 项断言（含 1.0 逐字节回归锁 + 互动 13 项）
     ├── fixtures/
     │   ├── golden-qzone-1.0.json  # 1.0 黄金基线（用 1.7.1 代码生成，逐字节比对）
     │   ├── qzone-sample.mjs       # 固定的 QQ 空间样例输入
     │   └── seed-wx-demo.mjs       # 合成朋友圈演示数据
     ├── export-session.mjs       # 「一次扫码」回归：会话管理器 / 编排器 / 接线 / 页面
     ├── mcp-smoke.mjs            # MCP 服务器冒烟测试
+    ├── mcp-cache.mjs            # MCP 缓存失效回归：文件变了必须重读
     ├── visualizer-static.mjs    # 可视化样例静态审查
     ├── plugin-package.mjs       # 插件包结构校验
     └── privacy-scan.mjs         # 隐私回扫：真实数据现算指纹，回扫包目录 / 说明文档 / 发布 zip
 
 CHANGELOG.md                      # 版本历史：改了什么、为什么、怎么回退
-qq-kb-pipeline/                   # 早期 Python 参考实现（合并/切块/摘要 + AstrBot 接入）
-QQ空间说说知识库方案.md           # 选型调研 + 关键工程点复盘
+交接说明.md                       # 给审核方：这是什么、怎么跑、该重点看哪儿、已知边界
+life-archive-pipeline/                   # 早期 Python 参考实现（合并/切块/摘要 + AstrBot 接入）
+人生档案方案.md           # 选型调研 + 关键工程点复盘
 微信朋友圈接入方案-2.0.md         # 2.0 方案：调研 / 实测 / 路线 / 「不影响 1.0」验收清单
 微信朋友圈数据契约-2.0.md         # 2.0 数据契约：朋友圈导出 JSON 的唯一格式
 微信朋友圈取数操作指引.md           # 从零到入库的逐步操作指引
-releases/qq-space-kb-*.zip        # 各历史版本的安装包（1.3.0 ~ 2.0.2，全部可直接导入）
+releases/life-archive-*.zip        # 各历史版本的安装包（1.3.0 ~ 3.0.0，全部可直接导入）
 ```
 
 Node 侧只用内置模块，**没有 npm 运行时依赖**；页面不加载任何远程资源。
@@ -254,7 +259,7 @@ Node 侧只用内置模块，**没有 npm 运行时依赖**；页面不加载任
 自检已经**脚本化**，不再靠手写关键词扫：
 
 ```bash
-cd qq-space-kb
+cd life-archive
 node tests/privacy-scan.mjs
 ```
 
@@ -298,7 +303,7 @@ node tests/privacy-scan.mjs
 ## 开发
 
 ```bash
-cd qq-space-kb
+cd life-archive
 node tests/test.mjs              # 121 项断言
 node tests/test-wx.mjs           # 62 项断言（2.0）：1.0 逐字节回归锁 / 解析 / 双源画像 / 端到端
 node tests/export-session.mjs    # 48 项断言：一次扫码（会话管理器 / 编排器 / 接线 / 页面）
@@ -307,7 +312,7 @@ node tests/visualizer-static.mjs # 可视化样例静态审查：信封、主题
 node tests/plugin-package.mjs    # 插件包结构校验：清单、路径、包体积、frontmatter、凭证
 node tests/privacy-scan.mjs      # 隐私回扫：真实数据现算指纹，回扫包内文件与 releases/*.zip
 
-cd ../qq-kb-pipeline
+cd ../life-archive-pipeline
 python3 tests/make_fixtures.py             # 生成合成 fixture（含归档库 sqlite3）
 python3 tests/test_pipeline.py             # 41 项断言
 ```

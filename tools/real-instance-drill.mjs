@@ -31,9 +31,9 @@ if (!args.dataDir) {
   process.exit(1);
 }
 const DATA_DIR = args.dataDir;
-// 包根自动探测：仓库里是 qq-space-kb/ 子目录，脱离仓库时是上一级。
+// 包根自动探测：仓库里是 life-archive/ 子目录，脱离仓库时是上一级。
 const detectPluginRoot = () => {
-  const candidates = [join(import.meta.dirname, '..'), join(import.meta.dirname, '..', 'qq-space-kb')];
+  const candidates = [join(import.meta.dirname, '..'), join(import.meta.dirname, '..', 'life-archive')];
   for (const candidate of candidates) {
     if (existsSync(join(candidate, 'miniapp', 'node', 'server.mjs'))) return candidate;
   }

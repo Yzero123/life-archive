@@ -1,0 +1,945 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>人生档案</title>
+    <style>
+      :root,
+      [data-theme='light'] {
+        --mcode-bg: #ffffff;
+        --mcode-bg-secondary: #f5f5f5;
+        --mcode-surface: #ffffff;
+        --mcode-surface-muted: #fafafa;
+        --mcode-text: #171717;
+        --mcode-text-muted: #666666;
+        --mcode-text-subtle: #adadad;
+        --mcode-border: #0a0a0a14;
+        --mcode-border-strong: #0a0a0af2;
+        --mcode-accent: #0094fc;
+        --mcode-success: #04b54b;
+        --mcode-warning: #f56811;
+        --mcode-danger: #f73646;
+        --mcode-primary-action-bg: #171717;
+        --mcode-primary-action-text: #ffffff;
+      }
+
+      [data-theme='dark'] {
+        --mcode-bg: #171717;
+        --mcode-bg-secondary: #1c1c1c;
+        --mcode-surface: #262626;
+        --mcode-surface-muted: #262626;
+        --mcode-text: #ededed;
+        --mcode-text-muted: #949494;
+        --mcode-text-subtle: #666666;
+        --mcode-border: #ffffff14;
+        --mcode-border-strong: #fffffff2;
+        --mcode-accent: #0077d9;
+        --mcode-success: #009c3d;
+        --mcode-warning: #e25507;
+        --mcode-danger: #e31937;
+        --mcode-primary-action-bg: #ffffff;
+        --mcode-primary-action-text: #171717;
+      }
+
+      * { box-sizing: border-box; }
+
+      body {
+        margin: 0;
+        background: var(--mcode-bg);
+        color: var(--mcode-text);
+        font-family: ui-sans-serif, -apple-system, system-ui, 'Segoe UI', Helvetica, Arial, sans-serif;
+        font-size: 14px;
+        line-height: 1.6;
+      }
+
+      .page { max-width: 1080px; margin: 0 auto; padding: 24px; }
+      .page > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; margin-bottom: 24px; }
+      h1 { font-size: 18px; line-height: 28px; font-weight: 600; margin: 0 0 4px; }
+      .subtitle { color: var(--mcode-text-muted); font-size: 14px; margin: 0; max-width: 62ch; }
+      h2 { font-size: 16px; line-height: 24px; font-weight: 500; margin: 0; }
+
+      section.panel {
+        background: var(--mcode-surface);
+        border: 1px solid var(--mcode-border);
+        border-radius: 12px;
+        padding: 20px;
+        margin-bottom: 24px;
+      }
+      .panel-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 16px; }
+      .panel-note { color: var(--mcode-text-muted); font-size: 12px; line-height: 16px; }
+
+      .steps { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 20px; }
+      .step {
+        display: inline-flex; align-items: center; gap: 8px;
+        border: 1px solid var(--mcode-border); border-radius: 999px;
+        padding: 4px 12px; font-size: 12px; color: var(--mcode-text-muted);
+        background: var(--mcode-surface-muted);
+      }
+      .step[data-state='active'] { color: var(--mcode-text); border-color: var(--mcode-accent); }
+      .step[data-state='done'] { color: var(--mcode-success); border-color: var(--mcode-success); }
+      .step[data-state='failed'] { color: var(--mcode-danger); border-color: var(--mcode-danger); }
+      .step-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+
+      .row { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; }
+      .field { display: flex; flex-direction: column; gap: 4px; }
+      .field label { font-size: 12px; color: var(--mcode-text-muted); }
+      input[type='text'], textarea {
+        height: 36px; padding: 0 10px; font: inherit; font-size: 14px;
+        background: var(--mcode-bg); color: var(--mcode-text);
+        border: 1px solid var(--mcode-border); border-radius: 8px; min-width: 180px;
+      }
+      textarea { height: auto; min-height: 96px; padding: 8px 10px; resize: vertical; width: 100%; line-height: 1.6; }
+      input:focus-visible, textarea:focus-visible, button:focus-visible {
+        outline: 2px solid var(--mcode-accent); outline-offset: 1px;
+      }
+
+      button {
+        height: 36px; padding: 0 14px; font: inherit; font-size: 14px;
+        border-radius: 8px; border: 1px solid var(--mcode-border);
+        background: var(--mcode-surface-muted); color: var(--mcode-text);
+        cursor: pointer; transition: background-color 150ms ease-out, color 150ms ease-out;
+      }
+      button:hover:not(:disabled) { background: var(--mcode-bg-secondary); }
+      button:disabled { opacity: 0.45; cursor: not-allowed; }
+      button.primary { background: var(--mcode-primary-action-bg); color: var(--mcode-primary-action-text); border-color: transparent; }
+      button.primary:hover:not(:disabled) { opacity: 0.88; }
+      button.danger { color: var(--mcode-danger); }
+      button.text { background: transparent; border-color: transparent; color: var(--mcode-accent); padding: 0 6px; height: 28px; }
+
+      .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 12px; margin-top: 20px; }
+      .stat { border: 1px solid var(--mcode-border); border-radius: 12px; padding: 12px 14px; background: var(--mcode-surface-muted); }
+      .stat-label { font-size: 12px; color: var(--mcode-text-muted); line-height: 16px; }
+      .stat-value { font-size: 22px; line-height: 30px; font-weight: 600; }
+
+      .status { margin-top: 16px; font-size: 13px; color: var(--mcode-text-muted); }
+      .status[data-tone='error'] { color: var(--mcode-danger); }
+      .status[data-tone='ok'] { color: var(--mcode-success); }
+
+      .log {
+        margin-top: 12px; max-height: 180px; overflow-y: auto;
+        border: 1px solid var(--mcode-border); border-radius: 8px;
+        background: var(--mcode-surface-muted); padding: 10px 12px;
+        font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 12px; line-height: 18px; color: var(--mcode-text-muted);
+      }
+      .log p { margin: 0 0 4px; }
+      .log p:last-child { margin-bottom: 0; }
+
+      .permission {
+        margin-top: 16px; padding: 12px 14px; border-radius: 12px;
+        border: 1px solid var(--mcode-warning); background: var(--mcode-surface-muted);
+      }
+      .permission h3 { font-size: 14px; margin: 0 0 4px; font-weight: 500; }
+      .permission p { margin: 0 0 10px; font-size: 13px; color: var(--mcode-text-muted); }
+
+      .chat-log { display: flex; flex-direction: column; gap: 12px; max-height: 420px; overflow-y: auto; padding-right: 4px; }
+      .msg { border: 1px solid var(--mcode-border); border-radius: 12px; padding: 12px 14px; background: var(--mcode-surface-muted); }
+      .msg[data-role='user'] { background: var(--mcode-bg-secondary); margin-left: 48px; }
+      .msg[data-role='bot'] { margin-right: 24px; }
+      .msg-role { font-size: 12px; color: var(--mcode-text-muted); margin-bottom: 4px; }
+      .msg-body { white-space: pre-wrap; word-break: break-word; }
+      .msg[data-grounded='false'] { border-color: var(--mcode-warning); }
+      .sources { margin-top: 8px; font-size: 12px; color: var(--mcode-text-muted); }
+      .sources summary { cursor: pointer; }
+      .sources ul { margin: 6px 0 0; padding-left: 18px; }
+      .sources li { margin-bottom: 4px; }
+      .rejected { margin: 6px 0 0; font-size: 12px; color: var(--mcode-text-muted); white-space: pre-wrap; }
+
+      .chat-form { display: flex; gap: 8px; margin-top: 12px; }
+      .chat-form input[type='text'] { flex: 1; }
+
+      .empty { color: var(--mcode-text-subtle); font-size: 13px; padding: 24px 0; text-align: center; }
+      .hint { font-size: 12px; color: var(--mcode-text-subtle); margin-top: 6px; }
+
+      .session {
+        margin-top: 12px;
+        padding: 10px 14px;
+        border: 1px solid var(--mcode-border);
+        border-radius: 12px;
+        background: var(--mcode-surface-muted);
+      }
+      .session[data-state='ready'] { border-color: var(--mcode-success); }
+      .session[data-state='waiting'] { border-color: var(--mcode-warning); }
+      .session-line {
+        margin: 0;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 13px;
+        color: var(--mcode-text);
+      }
+      .session-dot {
+        flex: none;
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: var(--mcode-text-subtle);
+      }
+      .session[data-state='ready'] .session-dot { background: var(--mcode-success); }
+      .session[data-state='waiting'] .session-dot { background: var(--mcode-warning); }
+      .session[data-state='off'] .session-dot { background: var(--mcode-danger); }
+      .sources-note {
+        margin-top: 6px;
+        font-size: 12px;
+        color: var(--mcode-text-subtle);
+      }
+      .note {
+        margin: 12px 0 0;
+        font-size: 12px;
+        line-height: 1.6;
+        color: var(--mcode-text-muted);
+        border-left: 2px solid var(--mcode-warning);
+        padding-left: 10px;
+      }
+      .profile { margin-top: 12px; }
+      .profile pre {
+        margin: 0;
+        padding: 12px 14px;
+        border: 1px solid var(--mcode-border);
+        border-radius: 10px;
+        background: var(--mcode-surface-muted);
+        color: var(--mcode-text);
+        font-family: inherit;
+        font-size: 13px;
+        line-height: 1.75;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+      .banner {
+        margin: 0 0 16px;
+        padding: 10px 14px;
+        border: 1px solid var(--mcode-warning);
+        border-radius: 10px;
+        background: var(--mcode-surface-muted);
+        color: var(--mcode-text);
+        font-size: 13px;
+        line-height: 1.6;
+      }
+      .banner strong { color: var(--mcode-warning); }
+      .path {
+        margin: 6px 0 0;
+        padding: 8px 10px;
+        border: 1px solid var(--mcode-border);
+        border-radius: 8px;
+        background: var(--mcode-surface-muted);
+        font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 12px;
+        line-height: 18px;
+        color: var(--mcode-text-muted);
+        word-break: break-all;
+      }
+      code {
+        font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 12px;
+        padding: 1px 4px;
+        border-radius: 4px;
+        background: var(--mcode-bg-secondary);
+      }
+
+      @media (max-width: 768px) {
+        .page { padding: 16px; }
+        .page > header { flex-direction: column; gap: 12px; }
+        .msg[data-role='user'] { margin-left: 16px; }
+        .msg[data-role='bot'] { margin-right: 0; }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        * { transition: none !important; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="page">
+      <header>
+        <div>
+          <h1>人生档案</h1>
+          <p class="subtitle">
+            导出你的 QQ 空间历史说说，建成可检索的知识库。聊天时只依据知识库里的真实内容作答，
+            查不到就说不知道。
+          </p>
+        </div>
+      </header>
+
+      <p class="banner" id="demo-banner" hidden>
+        当前载入的是<strong>演示数据</strong>（合成内容，不是你的真实 QQ 说说）。
+        要换成自己的数据，请点「开始导出」用手机 QQ 扫码登录。
+      </p>
+
+      <section class="panel" aria-labelledby="setup-title">
+        <div class="panel-head">
+          <h2 id="setup-title">导出与建库</h2>
+          <span class="panel-note" id="phase-label">状态：待开始</span>
+        </div>
+
+        <div class="steps" id="steps">
+          <span class="step" data-step="export"><span class="step-dot"></span>1 导出说说</span>
+          <span class="step" data-step="build"><span class="step-dot"></span>2 构建知识库</span>
+          <span class="step" data-step="ready"><span class="step-dot"></span>3 开始对话</span>
+        </div>
+
+        <div class="row">
+          <div class="field">
+            <label for="uin">你的 QQ 号</label>
+            <input id="uin" type="text" inputmode="numeric" autocomplete="off" placeholder="用于校验记录归属并还原发布时间" />
+          </div>
+          <div class="field">
+            <button id="btn-export" type="button">开始导出</button>
+          </div>
+          <div class="field">
+            <button id="btn-build" class="primary" type="button">构建知识库</button>
+          </div>
+          <div class="field">
+            <button id="btn-stop" class="danger" type="button" hidden>停止导出</button>
+          </div>
+        </div>
+        <p class="hint">
+          导出会打开 QQ 空间登录页，需要你本人用手机 QQ 扫码。抓取过程请勿切换 QQ 客户端账号，否则有封号风险。
+          整个流程只需要扫一次码（导出和回溯共用同一个浏览器），请不要关掉弹出的浏览器窗口。
+        </p>
+
+        <div class="session" id="session-box" data-state="off" hidden>
+          <p class="session-line">
+            <span class="session-dot" aria-hidden="true"></span>
+            <span id="session-text">登录会话未启动</span>
+          </p>
+          <p class="hint" id="session-hint"></p>
+        </div>
+
+        <div id="permission-box" class="permission" hidden>
+          <h3 id="perm-title">需要你的授权</h3>
+          <p id="perm-desc"></p>
+          <div class="row">
+            <button id="btn-allow" class="primary" type="button">允许一次</button>
+            <button id="btn-deny" type="button">拒绝</button>
+          </div>
+        </div>
+
+        <p class="status" id="status-line" role="status"></p>
+        <p class="note" id="stale-note" hidden></p>
+        <div class="log" id="log" aria-label="导出进度"></div>
+
+        <div class="stats" id="stats" hidden>
+          <div class="stat">
+            <div class="stat-label">说说总数</div>
+            <div class="stat-value" id="stat-total">0</div>
+          </div>
+          <div class="stat">
+            <div class="stat-label">已删除后恢复</div>
+            <div class="stat-value" id="stat-recovered">0</div>
+          </div>
+          <div class="stat">
+            <div class="stat-label">覆盖年份</div>
+            <div class="stat-value" id="stat-years">—</div>
+          </div>
+          <div class="stat">
+            <div class="stat-label">知识块</div>
+            <div class="stat-value" id="stat-chunks">0</div>
+          </div>
+          <div class="stat" id="stat-wx-card" hidden>
+            <div class="stat-label">朋友圈</div>
+            <div class="stat-value" id="stat-wx">0</div>
+          </div>
+        </div>
+        <p class="note" id="recovery-note" hidden></p>
+      </section>
+
+      <section class="panel" aria-labelledby="wx-title">
+        <div class="panel-head">
+          <h2 id="wx-title">微信朋友圈</h2>
+          <span class="panel-note" id="wx-state">未导入</span>
+        </div>
+        <p class="hint">
+          可选数据源，默认关。导入你自己发的朋友圈后，人物画像会多出朋友圈专属的维度——
+          发圈节奏、常去的地方、配图习惯、互动的人——还能对比你在两个平台说话方式的差别。
+          图片视频只存链接与描述，不下载。
+        </p>
+        <p class="hint">
+          外部工具按联系人分文件导出时，<strong>整个目录一起导入</strong>即可：
+          除了你发的动态，还能拿到<strong>你在别人朋友圈下留的言</strong>和<strong>你点的赞</strong>——
+          这两部分也是你说过的话，只是发生在别人的动态下面。
+          好友的正文只作上下文留个片段，不会被当成你说的话。
+        </p>
+        <p class="hint">
+          用外部解密工具导出朋友圈 JSON（<strong>文件名不限</strong>，按内容认），放到下面这个目录，然后点「导入」：
+        </p>
+        <p class="path" id="wx-dir"></p>
+        <div class="row" style="margin-top: 12px">
+          <div class="field" style="flex: 1; min-width: 260px">
+            <label for="wx-path">文件路径（留空＝自动查找常见位置）</label>
+            <input id="wx-path" type="text" autocomplete="off" placeholder="留空则自动查找桌面、下载、文档目录、微信导出目录" />
+          </div>
+        </div>
+        <div class="row" style="margin-top: 12px">
+          <button id="btn-wx-import" type="button">导入朋友圈数据</button>
+          <button id="btn-wx-toggle" type="button" disabled>启用朋友圈</button>
+          <button id="btn-wx-interactions" type="button" disabled>关闭朋友圈互动</button>
+          <button id="btn-wx-clear" class="danger" type="button" disabled>清空朋友圈数据</button>
+          <span class="panel-note" id="wx-message"></span>
+        </div>
+        <p class="note" id="wx-note" hidden></p>
+      </section>
+
+      <section class="panel" aria-labelledby="profile-title">
+        <div class="panel-head">
+          <h2 id="profile-title">人物画像</h2>
+          <span class="panel-note">让 bot 知道自己是谁，才能泛化而不只是复述</span>
+        </div>
+        <p class="hint">
+          读完全部说说后归纳出这个人的时间线、社交圈、说话方式和性格，注入每次对话。
+          底座是确定性统计，大模型只做润色，且逐句过事实校验。
+        </p>
+        <div class="row" style="margin-top: 12px">
+          <button id="btn-profile" type="button" disabled>生成人物画像</button>
+          <span class="panel-note" id="profile-state"></span>
+        </div>
+        <div class="profile" id="profile-box" hidden>
+          <pre id="profile-text"></pre>
+        </div>
+      </section>
+
+      <section class="panel" aria-labelledby="persona-title">
+        <div class="panel-head">
+          <h2 id="persona-title">人设</h2>
+          <span class="panel-note">决定 bot 用什么语气、什么身份说话</span>
+        </div>
+        <textarea id="persona" placeholder="例如：我是 2013 年入行的前端工程师，说话短、直接、爱用「哈哈哈」，不矫情。"></textarea>
+        <div class="row" style="margin-top: 12px">
+          <button id="btn-persona" type="button">保存人设</button>
+          <span class="panel-note" id="persona-state"></span>
+        </div>
+      </section>
+
+      <section class="panel" aria-labelledby="chat-title">
+        <div class="panel-head">
+          <h2 id="chat-title">对话</h2>
+          <span class="panel-note" id="chat-note">回答只依据知识库；资料不足以回答时固定回复「当时的我还不知道这是什么意思」</span>
+        </div>
+        <div class="chat-log" id="chat-log" aria-live="polite">
+          <p class="empty" id="chat-empty">还没有对话。先完成导出并构建知识库。</p>
+        </div>
+        <form class="chat-form" id="chat-form">
+          <input id="chat-input" type="text" autocomplete="off" placeholder="问我关于你过去的事，比如：2015 年你在忙什么？" />
+          <button class="primary" type="submit">发送</button>
+        </form>
+      </section>
+    </div>
+
+    <script>
+      (function () {
+        var el = {
+          uin: document.getElementById('uin'),
+          phase: document.getElementById('phase-label'),
+          status: document.getElementById('status-line'),
+          log: document.getElementById('log'),
+          steps: document.getElementById('steps'),
+          demoBanner: document.getElementById('demo-banner'),
+          stats: document.getElementById('stats'),
+          statTotal: document.getElementById('stat-total'),
+          statRecovered: document.getElementById('stat-recovered'),
+          statYears: document.getElementById('stat-years'),
+          statChunks: document.getElementById('stat-chunks'),
+          persona: document.getElementById('persona'),
+          personaState: document.getElementById('persona-state'),
+          recoveryNote: document.getElementById('recovery-note'),
+          btnProfile: document.getElementById('btn-profile'),
+          profileState: document.getElementById('profile-state'),
+          profileBox: document.getElementById('profile-box'),
+          profileText: document.getElementById('profile-text'),
+          permBox: document.getElementById('permission-box'),
+          permTitle: document.getElementById('perm-title'),
+          permDesc: document.getElementById('perm-desc'),
+          chatLog: document.getElementById('chat-log'),
+          chatEmpty: document.getElementById('chat-empty'),
+          chatForm: document.getElementById('chat-form'),
+          chatInput: document.getElementById('chat-input'),
+          btnExport: document.getElementById('btn-export'),
+          btnStop: document.getElementById('btn-stop'),
+          btnBuild: document.getElementById('btn-build'),
+          btnPersona: document.getElementById('btn-persona'),
+          btnAllow: document.getElementById('btn-allow'),
+          btnDeny: document.getElementById('btn-deny'),
+          sessionBox: document.getElementById('session-box'),
+          sessionText: document.getElementById('session-text'),
+          sessionHint: document.getElementById('session-hint'),
+          staleNote: document.getElementById('stale-note'),
+          statWxCard: document.getElementById('stat-wx-card'),
+          statWx: document.getElementById('stat-wx'),
+          wxState: document.getElementById('wx-state'),
+          wxDir: document.getElementById('wx-dir'),
+          wxPath: document.getElementById('wx-path'),
+          wxMessage: document.getElementById('wx-message'),
+          wxNote: document.getElementById('wx-note'),
+          btnWxImport: document.getElementById('btn-wx-import'),
+          btnWxToggle: document.getElementById('btn-wx-toggle'),
+          btnWxInteractions: document.getElementById('btn-wx-interactions'),
+          btnWxClear: document.getElementById('btn-wx-clear'),
+        };
+
+        var PHASE_TEXT = {
+          idle: '待开始',
+          exporting: '正在导出',
+          building: '正在构建',
+          ready: '知识库就绪',
+          failed: '出错了',
+        };
+
+        var lastLogLength = -1;
+        var latestState = null;
+
+        function api(path, options) {
+          return fetch(path, Object.assign({ headers: { 'content-type': 'application/json' } }, options))
+            .then(function (res) { return res.json(); })
+            .catch(function (error) { return { ok: false, message: String(error && error.message) }; });
+        }
+
+        function post(path, body) {
+          return api(path, { method: 'POST', body: JSON.stringify(body || {}) });
+        }
+
+        function setStep(name, state) {
+          var node = el.steps.querySelector('[data-step="' + name + '"]');
+          if (node) node.setAttribute('data-state', state);
+        }
+
+        /**
+         * 显示导出登录会话的状态。
+         *
+         * 用户最怕的是「又要重扫一次」，所以这里把三件事讲清楚：
+         * 浏览器还活着吗、登录态就绪了吗、接下来要不要再扫码。
+         */
+        function renderSession(session) {
+          if (!session) {
+            el.sessionBox.hidden = true;
+            return;
+          }
+          el.sessionBox.hidden = false;
+          var text = '';
+          var hint = '';
+          var tone = 'off';
+
+          if (session.browserAlive && session.loginReady) {
+            tone = 'ready';
+            text = '登录会话保持中：全程只需要扫码一次，回溯已删除说说也不用再扫。';
+            hint = '请不要关掉那个 QQ 空间浏览器窗口，关掉后登录态会失效。';
+          } else if (session.browserAlive) {
+            tone = 'waiting';
+            text = session.state === 'exporting'
+              ? '浏览器已登录，正在抓取说说。'
+              : '浏览器已打开，等你扫码登录 QQ 空间。';
+            hint = '扫码之后还要在手机 QQ 上点「确认登录」，两步都做完才会下发会话。';
+          } else {
+            tone = 'off';
+            text = '导出浏览器已关闭，登录态已失效。';
+            hint = '再点一次「开始导出」会重新拉起浏览器，扫码一次即可继续。';
+          }
+
+          if (session.error) {
+            text = '导出中断：' + session.error;
+            hint = '浏览器如果还开着，可以直接在里面补扫一次，不用重启任何东西。';
+          }
+
+          el.sessionBox.setAttribute('data-state', tone);
+          el.sessionText.textContent = text;
+          el.sessionHint.textContent = hint;
+        }
+
+        /**
+         * 微信朋友圈面板（2.0）。
+         *
+         * 这一块默认是关的，所以面板要把三件事说清楚：
+         * 现在是什么状态、数据放在哪、导入/启用的下一步该点什么。
+         * 让人自己猜路径、自己找按钮，是这个功能最容易劝退的地方。
+         */
+        function renderWx(wx) {
+          var imported = Boolean(wx.imported);
+          el.btnWxToggle.disabled = !imported;
+          el.btnWxClear.disabled = !imported;
+          el.btnWxInteractions.disabled = !imported;
+          el.btnWxToggle.textContent = wx.enabled ? '停用朋友圈' : '启用朋友圈';
+          el.btnWxInteractions.textContent = wx.interactions === false ? '开启朋友圈互动' : '关闭朋友圈互动';
+          el.wxDir.textContent = wx.targetDir || '';
+
+          if (!imported) {
+            el.wxState.textContent = '未导入';
+            el.wxNote.hidden = true;
+            return;
+          }
+          // 2.1：三种东西分开报，别混成一句「N 条」。
+          var parts = [wx.count + ' 条动态'];
+          if (wx.comments) parts.push(wx.comments + ' 条留言');
+          if (wx.likes) parts.push(wx.likes + ' 次点赞');
+          el.wxState.textContent = wx.enabled
+            ? '已启用 · ' + parts.join(' · ')
+            : '已导入 ' + parts.join(' · ') + '（未启用）';
+          if (wx.enabled) {
+            el.wxNote.hidden = false;
+            var note = '朋友圈已计入知识库。导入或启停后要点「重新构建知识库」才会生效。';
+            if (wx.interactions === false) {
+              note += '当前只计入了你发的动态，留言与点赞没有计入。';
+            }
+            el.wxNote.textContent = note;
+          } else {
+            el.wxNote.hidden = true;
+          }
+        }
+
+        function renderState(state) {
+          latestState = state;
+          /**
+           * 顶部状态栏显示的是「现在能做什么」，不是「上一次操作停在哪一步」。
+           *
+           * 上一轮导出结束后，服务端的 phase 会被置回 idle；但磁盘上的知识库还在、
+           * 照样能对话。这时候显示「待开始」是错的——用户会以为还没建好。
+           * 所以这里以 kbReady（有没有可用的知识库）为准来定状态。
+           */
+          var displayPhase = state.phase;
+          if (state.phase === 'exporting' || state.phase === 'building' || state.phase === 'failed') {
+            displayPhase = state.phase;
+          } else if (state.kbReady) {
+            displayPhase = 'ready';
+          }
+
+          el.phase.textContent = '状态：' + (PHASE_TEXT[displayPhase] || displayPhase);
+          if (state.message) {
+            el.status.textContent = state.message;
+            el.status.setAttribute('data-tone', displayPhase === 'failed' ? 'error' : displayPhase === 'ready' ? 'ok' : 'normal');
+          }
+          if (state.lastError && state.phase === 'failed') {
+            el.status.textContent = state.message + '：' + state.lastError;
+          }
+
+          el.btnExport.disabled = Boolean(state.exporting);
+          el.btnStop.hidden = !state.exporting;
+          // 只有朋友圈数据时也要能建库——不然这个功能就成了摆设。
+          var hasWx = Boolean(state.wx && state.wx.imported);
+          el.btnBuild.disabled = Boolean(state.exporting) || state.phase === 'building'
+            || !(state.hasMessages || state.hasArchive || hasWx);
+          el.btnBuild.textContent = state.kbReady ? '重新构建知识库' : '构建知识库';
+
+          setStep('export', state.exporting ? 'active' : state.hasMessages ? 'done' : 'idle');
+          setStep('build', state.phase === 'building' ? 'active' : state.kbReady ? 'done' : 'idle');
+          setStep('ready', state.kbReady ? 'done' : 'idle');
+
+          // 导出了新数据但还没重建：明确告诉用户知识库是旧的。
+          if (state.kbStale) {
+            el.staleNote.hidden = false;
+            el.staleNote.textContent = '新导出的数据还没进知识库。当前对话用的是上一次的构建结果，点「重新构建知识库」刷新。';
+          } else {
+            el.staleNote.hidden = true;
+          }
+
+          renderSession(state.exportSession);
+
+          if (state.pendingPermission) {
+            el.permBox.hidden = false;
+            el.permTitle.textContent = '需要你的授权：' + (state.pendingPermission.toolName || '某项操作');
+            el.permDesc.textContent = state.pendingPermission.description || 'Agent 正在等待你确认这次操作。';
+          } else {
+            el.permBox.hidden = true;
+          }
+
+          var progress = state.progress || [];
+          if (progress.length !== lastLogLength) {
+            lastLogLength = progress.length;
+            el.log.innerHTML = '';
+            progress.slice(-40).forEach(function (item) {
+              var line = document.createElement('p');
+              line.textContent = '· ' + (item.text || item.kind || '');
+              el.log.appendChild(line);
+            });
+            el.log.scrollTop = el.log.scrollHeight;
+          }
+
+          var stats = state.stats || {};
+          if (stats.chunkCount) {
+            el.stats.hidden = false;
+            el.statTotal.textContent = stats.totalRecords || 0;
+            el.statRecovered.textContent = stats.recovered || 0;
+            el.statYears.textContent = stats.yearFrom ? stats.yearFrom + '–' + stats.yearTo : '—';
+            el.statChunks.textContent = stats.chunkCount || 0;
+          }
+          if (stats.recoveryNote) {
+            el.recoveryNote.hidden = false;
+            el.recoveryNote.textContent = stats.recoveryNote;
+          } else {
+            el.recoveryNote.hidden = true;
+          }
+          if (state.profileBuilding) {
+            el.btnProfile.disabled = true;
+            el.profileState.textContent = state.profileMessage || '正在生成…';
+          } else if (state.hasProfile) {
+            el.btnProfile.disabled = false;
+            el.profileState.textContent = state.profileMessage
+              || (state.profileSource === 'llm'
+                ? '已生成（叙述由大模型润色并校验）'
+                : '已生成（统计版）· 再点一次可让大模型润色成更生动的画像');
+            if (el.profileBox.hidden) loadProfile();
+          } else {
+            el.profileState.textContent = state.profileMessage || '尚未生成';
+            el.btnProfile.disabled = !stats.chunkCount;
+          }
+
+          if (state.ownerUin && document.activeElement !== el.uin) el.uin.value = state.ownerUin;
+          if (state.persona && document.activeElement !== el.persona) el.persona.value = state.persona;
+          el.demoBanner.hidden = !state.isDemo;
+
+          renderWx(state.wx || {});
+
+          var wxCount = stats.wx ? Number(stats.wx.count || 0) : 0;
+          el.statWxCard.hidden = !wxCount;
+          el.statWx.textContent = wxCount;
+        }
+
+        function poll() {
+          api('/api/state').then(function (state) {
+            if (state && state.phase) renderState(state);
+            var busy = state && (state.exporting || state.pendingPermission);
+            window.setTimeout(poll, busy ? 1200 : 4000);
+          }).catch(function () {
+            window.setTimeout(poll, 6000);
+          });
+        }
+
+        // 没答上来时要说清是「知识库里没有」还是「模型编了被拦下」，
+        // 两者含义完全不同，混成一句话会让人以为功能坏了。
+        var FALLBACK_REASON = {
+          knowledge_base_empty: '知识库还是空的',
+          no_confident_match: '知识库里没有这条',
+          model_declined: '知识库里没有这条',
+          ungrounded_factual_claim: '回答含资料外的事实，已拦下',
+        };
+
+        function appendMessage(role, text, grounded, sources, reason, rejected, scope) {
+          if (el.chatEmpty) { el.chatEmpty.remove(); el.chatEmpty = null; }
+          var wrap = document.createElement('div');
+          wrap.className = 'msg';
+          wrap.setAttribute('data-role', role);
+          if (grounded === false) wrap.setAttribute('data-grounded', 'false');
+
+          var roleLabel = document.createElement('div');
+          roleLabel.className = 'msg-role';
+          var suffix = grounded === false ? (FALLBACK_REASON[reason] || '知识库无记录') : '';
+          roleLabel.textContent = role === 'user' ? '我' : (suffix ? '当时的我 · ' + suffix : '当时的我');
+          wrap.appendChild(roleLabel);
+
+          var body = document.createElement('div');
+          body.className = 'msg-body';
+          body.textContent = text;
+          wrap.appendChild(body);
+
+          if (rejected) {
+            var draft = document.createElement('details');
+            draft.className = 'sources';
+            var draftSummary = document.createElement('summary');
+            draftSummary.textContent = '查看被拦下的原话（未采用）';
+            draft.appendChild(draftSummary);
+            var draftBody = document.createElement('p');
+            draftBody.className = 'rejected';
+            draftBody.textContent = rejected;
+            draft.appendChild(draftBody);
+            wrap.appendChild(draft);
+          }
+
+          if (sources && sources.length) {
+            var details = document.createElement('details');
+            details.className = 'sources';
+            var summary = document.createElement('summary');
+            summary.textContent = '依据 ' + sources.length + ' 条知识库记录'
+              + (scope === 'full' ? '（检索没命中，已翻全库）' : '');
+            details.appendChild(summary);
+            var list = document.createElement('ul');
+            sources.forEach(function (source) {
+              var item = document.createElement('li');
+              item.textContent = (source.year ? '[' + source.year + '] ' : '') + (source.text || source.id || '');
+              list.appendChild(item);
+            });
+            details.appendChild(list);
+            wrap.appendChild(details);
+          } else if (grounded !== false && scope === 'full') {
+            // 泛化问：没有逐条来源，但确实翻过全库——说清楚，别让人以为没依据
+            var note = document.createElement('div');
+            note.className = 'sources-note';
+            note.textContent = '依据：全库速览（检索没命中具体说说，已翻全部记录）';
+            wrap.appendChild(note);
+          }
+
+          el.chatLog.appendChild(wrap);
+          el.chatLog.scrollTop = el.chatLog.scrollHeight;
+        }
+
+        el.btnExport.addEventListener('click', function () {
+          el.status.textContent = '正在启动导出…';
+          post('/api/export/start', { ownerUin: el.uin.value.trim() }).then(function (result) {
+            if (!result.ok) el.status.textContent = result.message || '启动失败';
+          });
+        });
+
+        el.btnStop.addEventListener('click', function () {
+          post('/api/export/stop', {});
+        });
+
+        el.btnBuild.addEventListener('click', function () {
+          el.status.textContent = '正在构建知识库…';
+          post('/api/kb/build', { ownerUin: el.uin.value.trim(), persona: el.persona.value }).then(function (result) {
+            if (result.ok) {
+              el.status.textContent = '知识库已就绪，可以开始对话了。';
+            } else {
+              el.status.textContent = result.message || '构建失败';
+              el.status.setAttribute('data-tone', 'error');
+            }
+          });
+        });
+
+        el.btnWxImport.addEventListener('click', function () {
+          el.wxMessage.textContent = '正在查找导出的 JSON…';
+          var path = el.wxPath.value.trim();
+          post('/api/wx/import', path ? { path: path } : {}).then(function (result) {
+            if (result && result.ok) {
+              var parts = [result.count + ' 条动态'];
+              if (result.comments) parts.push(result.comments + ' 条留言');
+              if (result.likes) parts.push(result.likes + ' 次点赞');
+              el.wxMessage.textContent = '已导入 ' + parts.join(' · ')
+                + '（另有 ' + result.notMine + ' 条不是本人发的，已忽略）';
+            } else {
+              el.wxMessage.textContent = (result && result.message) || '导入失败';
+            }
+            poll();
+          });
+        });
+
+        el.btnWxInteractions.addEventListener('click', function () {
+          var on = Boolean(latestState && latestState.wx && latestState.wx.interactions !== false);
+          post('/api/wx/interactions', { enabled: !on }).then(function (result) {
+            if (result && result.ok) {
+              el.wxMessage.textContent = result.interactions
+                ? '已计入朋友圈互动，点「重新构建知识库」生效'
+                : '已排除朋友圈互动，点「重新构建知识库」生效';
+            } else {
+              el.wxMessage.textContent = (result && result.message) || '操作失败';
+            }
+            poll();
+          });
+        });
+
+        el.btnWxToggle.addEventListener('click', function () {
+          var enabled = Boolean(latestState && latestState.wx && latestState.wx.enabled);
+          post('/api/wx/switch', { enabled: !enabled }).then(function (result) {
+            if (result && result.ok) {
+              el.wxMessage.textContent = result.enabled
+                ? '已启用，点「重新构建知识库」生效'
+                : '已停用，点「重新构建知识库」生效';
+            } else {
+              el.wxMessage.textContent = (result && result.message) || '操作失败';
+            }
+            poll();
+          });
+        });
+
+        el.btnWxClear.addEventListener('click', function () {
+          post('/api/wx/clear', {}).then(function (result) {
+            el.wxMessage.textContent = result && result.ok
+              ? '已清空，点「重新构建知识库」生效'
+              : '清空失败';
+            poll();
+          });
+        });
+
+        function loadProfile() {
+          api('/api/profile').then(function (result) {
+            if (!result || !result.ok) return;
+            el.profileBox.hidden = false;
+            el.profileText.textContent = result.narrative
+              ? result.narrative + '\n\n—— 统计底座 ——\n' + result.facts
+              : result.facts;
+          }).catch(function () {});
+        }
+
+        el.btnProfile.addEventListener('click', function () {
+          el.btnProfile.disabled = true;
+          el.profileState.textContent = '正在读完全部说说并归纳…';
+          post('/api/profile/build', {}).then(function (result) {
+            if (!result || !result.ok) {
+              el.profileState.textContent = (result && result.message) || '启动失败';
+              el.btnProfile.disabled = false;
+            }
+            // 生成在后台跑，状态由轮询刷新
+          }).catch(function () {
+            el.profileState.textContent = '启动失败';
+            el.btnProfile.disabled = false;
+          });
+        });
+
+        el.btnPersona.addEventListener('click', function () {
+          post('/api/persona', { persona: el.persona.value }).then(function (result) {
+            el.personaState.textContent = result.ok ? '已保存' : (result.message || '保存失败');
+          });
+        });
+
+        el.btnAllow.addEventListener('click', function () {
+          post('/api/permission', { decision: 'allow' }).then(poll);
+        });
+
+        el.btnDeny.addEventListener('click', function () {
+          post('/api/permission', { decision: 'deny' }).then(poll);
+        });
+
+        el.chatForm.addEventListener('submit', function (event) {
+          event.preventDefault();
+          var text = el.chatInput.value.trim();
+          if (!text) return;
+          appendMessage('user', text, null, null);
+          el.chatInput.value = '';
+          var pending = document.createElement('div');
+          pending.className = 'msg';
+          pending.setAttribute('data-role', 'bot');
+          pending.innerHTML = '<div class="msg-role">当时的我</div><div class="msg-body">…</div>';
+          el.chatLog.appendChild(pending);
+          el.chatLog.scrollTop = el.chatLog.scrollHeight;
+          post('/api/chat', { message: text }).then(function (result) {
+            if (!result.ok) {
+              pending.remove();
+              appendMessage('bot', result.message || '出错了', false, null, null, null);
+              return;
+            }
+            if (!result.started) {
+              // 检索闸门当场就给了固定话术，不用等模型。
+              pending.remove();
+              appendMessage('bot', result.answer, result.grounded, result.sources, result.reason, result.rejected, result.scope);
+              return;
+            }
+            // 模型回合在后台跑：轮询取结果。
+            // 回合可能跑几十秒，挂在这一次请求里会被宿主掐断，所以前端主动轮询。
+            pending.querySelector('.msg-body').textContent = '正在想…';
+            waitForChat(result.id, pending, 0);
+          });
+        });
+
+        function waitForChat(id, pending, attempt) {
+          window.setTimeout(function () {
+            api('/api/chat/result?id=' + encodeURIComponent(id)).then(function (result) {
+              // 还在跑：继续等。
+              if (result.status === 'running' && attempt < 300) {
+                waitForChat(id, pending, attempt + 1);
+                return;
+              }
+              // 传输层出错（没有 status 字段）时重试，别把一次网络抖动当成回答失败。
+              if (result.status === undefined && attempt < 300) {
+                waitForChat(id, pending, attempt + 1);
+                return;
+              }
+              pending.remove();
+              if (result.ok && result.status === 'done') {
+                appendMessage('bot', result.answer, result.grounded, result.sources, result.reason, result.rejected, result.scope);
+              } else {
+                appendMessage('bot', result.message || '生成回答失败', false, null, null, null);
+              }
+            });
+          }, 1200);
+        }
+
+        poll();
+      })();
+    </script>
+  </body>
+</html>

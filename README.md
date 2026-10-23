@@ -128,6 +128,18 @@ git clone https://github.com/Yzero123/qq-space-kb.git
 > 数据格式见 [`微信朋友圈数据契约-2.0.md`](微信朋友圈数据契约-2.0.md)，
 逐步操作见 [`微信朋友圈取数操作指引.md`](微信朋友圈取数操作指引.md)。
 
+### 取数辅助脚本（仓库 `tools/`）
+
+抓密钥这一步在 macOS 上有平台级硬门槛，脚本把踩过的坑都填好了：
+
+| 脚本 | 作用 |
+|---|---|
+| `tools/wx-clone-capture.py` | **推荐路线**：用工具自带的一次性副本流程抓密钥，**不动官方安装、不用 sudo、不改系统设置** |
+| `tools/wx-path-check.py` | 只读预判：检查签名 / 写权限 / 调试授权，给出「点获取会不会失败」的结论 |
+| `tools/wx-prepare-copy.sh` | 把 `/Applications/WeChat.app` 换成自己的副本（旧过权限门办法，已被 AMFI 拒绝推翻，留档） |
+| `tools/wx-restore-copy.sh` | 一键还原上面的副本 |
+| `tools/real-instance-drill.mjs` | 在**真实 dataDir** 上跑一遍完整验收路径，跑完自动还原 |
+
 ---
 
 ## 版本历史与回退

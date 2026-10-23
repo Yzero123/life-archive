@@ -11,7 +11,9 @@ import { join } from 'node:path';
 
 import {
   buildChunks,
+  buildGroundingText,
   buildIndex,
+  buildKbDigest,
   buildProfile,
   buildYearSummaries,
   emptyRecord,
@@ -397,6 +399,46 @@ check('引介出来的人名必须在资料里', () => {
 check('资料里没有的年份被拦下', () => {
   assert.equal(factualTokensGrounded('2019 年我去了冰岛。', CTX_2015), false);
 });
+check('数字写成「万」不被误判成编造', () => {
+  // 踩过的坑：画像里写 3261887 个赞，模型自然地写成「326 万」，
+  // 逐字比对就判成编造——有据的回答被误杀成「不知道」。
+  const ctx = '[互动总量] 3261887 个赞、49 条评论';
+  assert.equal(factualTokensGrounded('你累计有 326 万个赞。', ctx), true);
+  assert.equal(factualTokensGrounded('你那条有 55 万赞。', '[互动] 550000 个赞'), true);
+  assert.equal(factualTokensGrounded('你累计有 326 万个赞。', '[互动] 999 个赞'), false);
+});
+check('数量级差太远的数字照样被拦', () => {
+  assert.equal(factualTokensGrounded('你有 500 万个赞。', '[互动] 550000 个赞'), false);
+});
+check('模糊量「X 多万」按区间判，不按点值判', () => {
+  // 中文里「五十多万」是区间（50 万到 60 万），不是 500000 这个点。
+  // 库里有 543000，模型写「五十多万」是**准确**的，按点值比会误杀。
+  assert.equal(factualTokensGrounded('那条有五十多万个赞。', '[互动] 543000 个赞'), true);
+  assert.equal(factualTokensGrounded('那条有五十多万个赞。', '[互动] 39 个赞'), false);
+  assert.equal(factualTokensGrounded('那条有三十多万个赞。', '[互动] 543000 个赞'), false);
+  // 模糊量不该再被当成点值重复判一次
+  assert.equal(factualTokensGrounded('五十多万', '[互动] 500000 个赞'), true);
+});
+check('库里的小数字不再给「万」级数字背书', () => {
+  // 踩过的坑：库里有个孤零零的 50，50×1e4=500000，
+  // 于是「五十万」靠这个 50 蒙混过关——红线形同虚设。
+  assert.equal(factualTokensGrounded('你有 50 万个赞。', '[互动] 50 个赞'), false);
+  assert.equal(factualTokensGrounded('你有 500 万个赞。', '[互动] 50 个赞'), false);
+});
+check('全库速览把每条记录摊平成「日期 · 正文」', () => {
+  const digest = buildKbDigest(merged);
+  assert.ok(/\d{4}-\d{2}-\d{2} · /.test(digest), digest.slice(0, 120));
+  assert.ok(digest.includes('离线网页'), '速览里没有正文');
+  assert.ok(digest.includes('时间未知'), '没有时间戳的记录要标出来');
+});
+check('接地对照文本覆盖整个知识库（含没被检索到的年份）', () => {
+  const text = buildGroundingText(merged, buildYearSummaries(merged), '画像');
+  // 早先只拿「本轮检索到的几块」当对照，模型提到库里真实存在、
+  // 但这轮没检索到的内容就会被误判成编造。
+  assert.ok(text.includes(formatTimestamp(TS_2015, false)), '对照文本里没有那条记录的日期');
+  assert.ok(text.includes('静安寺'), '对照文本里没有正文');
+  assert.ok(text.includes('离线网页'), '对照文本里没有正文');
+});
 check('画像里带各年代表原文（模型照着原话答，接地校验才有据）', () => {
   const p = buildProfile(merged, buildYearSummaries(merged));
   assert.ok(p.facts.includes('[各年代表原文]'));
@@ -414,7 +456,7 @@ check('块内含元数据前缀', () => {
   const c = chunks.find((x) => x.published_at === TS_2015);
   assert.ok(c.text.includes(`[时间] ${formatTimestamp(TS_2015)}`), c.text.split('\n')[0]);
   assert.ok(c.text.includes('[位置] 上海市静安区'));
-  assert.ok(c.text.includes('[互动] 2条评论 / 18个赞'));
+  assert.ok(c.text.includes('[互动] 18个赞 / 2条评论'));
   assert.ok(c.text.includes('[评论摘录]'));
 });
 check('已恢复块带来源标记', () => {
@@ -589,8 +631,33 @@ check('画像里的年份都在记录里', () => {
   for (const year of years) assert.ok(known.has(year), `画像出现记录里没有的年份 ${year}`);
 });
 check('画像里的统计与记录一致', () => {
-  const posted = merged.filter((r) => r.kind !== 'guestbook' && (r.content ?? '').trim());
-  assert.ok(profile.facts.includes(`共 ${posted.length} 条说说`), profile.facts);
+  const all = merged.filter((r) => r.kind !== 'guestbook');
+  const withBody = all.filter((r) => (r.content ?? '').trim());
+  const traces = all.filter((r) => !(r.content ?? '').trim());
+  // 画像报的是**全量**条数，不能只报有正文的那些——否则会和页面对不上。
+  assert.ok(profile.facts.includes(`共 ${all.length} 条说说`), profile.facts);
+  assert.ok(profile.facts.includes(`有正文 ${withBody.length} 条`), profile.facts);
+  if (traces.length) {
+    assert.ok(profile.facts.includes(`另有 ${traces.length} 条已删除`), profile.facts);
+  }
+});
+check('画像里的「已删除后恢复」是全量口径', () => {
+  const recovered = merged.filter((r) => r.recovered).length;
+  if (recovered) {
+    assert.ok(profile.facts.includes(`[已删除后恢复] ${recovered} 条`), profile.facts);
+  }
+});
+check('赞 / 评论 / 转发三个数各归各位', () => {
+  const likeTotal = merged.reduce((s, r) => s + Number(r.like_count ?? 0), 0);
+  const commentTotal = merged.reduce(
+    (s, r) => s + Math.max(Number(r.comment_count ?? 0), (r.comments ?? []).length),
+    0,
+  );
+  if (likeTotal) assert.ok(profile.facts.includes(`${likeTotal} 个赞`), profile.facts);
+  if (commentTotal) assert.ok(profile.facts.includes(`${commentTotal} 条评论`), profile.facts);
+  // 转发数只在有的时候才出现，不能凭空报一个
+  const forwardTotal = merged.reduce((s, r) => s + Number(r.forward_count ?? 0), 0);
+  if (forwardTotal) assert.ok(profile.facts.includes(`${forwardTotal} 次转发`), profile.facts);
 });
 
 const cleaned = sanitizeNarrative(
@@ -621,9 +688,17 @@ await writeFile(join(dataDir, 'raw', 'qzone_archive.json'), JSON.stringify(ARCHI
 
 const agentCalls = [];
 let agentReply = '2015 年那会儿你在静安寺，把 QQ 空间历史说说整理成了离线网页，翻旧内容不用再一个个点。';
+let agentFailNext = 0;
 const mockAgent = {
   async run(input) {
     agentCalls.push(input.text);
+    // 模拟宿主在 Mini App 刚启动 / 运行时换代时回的 AGENT_UNAVAILABLE
+    if (agentFailNext > 0) {
+      agentFailNext -= 1;
+      const error = new Error('Mini App Agent is unavailable');
+      error.code = 'AGENT_UNAVAILABLE';
+      throw error;
+    }
     // 画像任务：返回一段叙述，其中一句故意写了记录里没有的年份
     if (input.text.includes('【任务】')) {
       return {
@@ -780,26 +855,39 @@ try {
   });
   check('回答时把检索到的资料传给了 Agent', () => {
     assert.ok(agentCalls.length >= 1);
-    assert.ok(agentCalls[0].includes('知识库资料'));
+    assert.ok(agentCalls[0].includes('相关说说'));
     assert.ok(agentCalls[0].includes('静安寺'));
   });
 
-  // 未命中 → 固定话术，且不调用 Agent
-  const callsBefore = agentCalls.length;
-  const miss = await ask('特斯拉 Cybertruck 的续航是多少');
-  check('知识库外问题：回固定话术', () => {
-    assert.equal(miss.ok, true);
-    assert.equal(miss.grounded, false);
-    assert.equal(miss.answer, FALLBACK);
-    assert.equal(miss.sources.length, 0);
-    assert.equal(miss.reason, 'no_confident_match');
-  });
-  check('未命中时不调用 Agent（不产生任何编造机会）', () => {
-    assert.equal(agentCalls.length, callsBefore);
-  });
-  check('未命中是同步返回的，不占用后台任务', () => {
-    assert.equal(miss.started, undefined, '闸门拦下时应当场给固定话术');
-  });
+  // 检索落空 → 升级到全库速览，把整个知识库摊给模型
+  {
+    const before = agentCalls.length;
+    agentReply = '2015 年那会儿在静安寺把 QQ 空间历史说说整理成了离线网页。';
+    const generic = await ask('我是个什么样的人');
+    check('泛化问也走模型（不再有检索闸门直接拒答）', () => {
+      assert.equal(generic.ok, true);
+      assert.equal(agentCalls.length, before + 1, '泛化问也应该调模型');
+    });
+    check('检索没命中时升级到全库速览', () => {
+      assert.ok(agentCalls[before].includes('【全库速览】'), 'prompt 里没有全库速览');
+      assert.equal(generic.scope, 'full');
+    });
+    check('全库速览里带上了每条记录的日期和正文', () => {
+      assert.ok(/20\d\d-\d\d-\d\d · /.test(agentCalls[before]), '速览里没有「日期 · 正文」的格式');
+    });
+  }
+
+  // 模型自己说不知道 → 固定话术
+  {
+    agentReply = FALLBACK;
+    const miss = await ask('特斯拉 Cybertruck 的续航是多少');
+    check('模型说不知道时回固定话术', () => {
+      assert.equal(miss.ok, true);
+      assert.equal(miss.grounded, false);
+      assert.equal(miss.answer, FALLBACK);
+      assert.equal(miss.reason, 'model_declined');
+    });
+  }
 
   // Agent 编造 → 接地校验拦下
   agentReply = '2019 年你去了冰岛看极光，还在东京吃了金枪鱼。';
@@ -940,13 +1028,28 @@ try {
     assert.ok(last.includes('【你是谁】'), '应带上人物画像');
   });
 
-  // 泛化路由不放松越界红线：问知识库里没有的特斯拉，画像存在也照样回固定话术
+  // 泛化路由不放松事实红线：问知识库里没有的特斯拉，模型编出来就要被拦
   const beforeOutOfScope = agentCalls.length;
+  agentReply = '你 2015 年就买了特斯拉 Model 3，售价 35 万。';
   const outOfScope = await ask('我当年买过特斯拉吗');
-  check('泛化路由不放行越界问题', () => {
+  check('泛化路由照样拦下编造的具体事实', () => {
     assert.equal(outOfScope.answer, FALLBACK);
-    assert.equal(outOfScope.reason, 'no_confident_match');
-    assert.equal(agentCalls.length, beforeOutOfScope, '越界问题不应调用模型');
+    assert.equal(outOfScope.reason, 'ungrounded_factual_claim');
+    assert.ok(outOfScope.rejected.includes('特斯拉'), outOfScope.rejected);
+  });
+  check('越界问题也会调模型（不再有检索闸门直接拒答）', () => {
+    assert.ok(agentCalls.length > beforeOutOfScope, '越界问题也应该调模型，由事实红线兜底');
+  });
+
+  // 宿主在 Mini App 刚启动、运行时换代的那一瞬间会回 AGENT_UNAVAILABLE，
+  // 它的定义是「什么都没开始，稍后重试即可」——不重试的话，
+  // Mini App 起来后问的第一句话会直接报错，第二句又正常，像「偶发抽风」。
+  agentFailNext = 1;
+  agentReply = '2015 年那会儿你在静安寺，把 QQ 空间历史说说整理成了离线网页，翻旧内容不用再一个个点。';
+  const afterUnavailable = await ask('2015 年在忙什么');
+  check('宿主返回 AGENT_UNAVAILABLE 时自动重试，不直接报错', () => {
+    assert.notEqual(afterUnavailable.status, 'error', JSON.stringify(afterUnavailable));
+    assert.equal(afterUnavailable.answer, agentReply);
   });
 
   // 页面可访问

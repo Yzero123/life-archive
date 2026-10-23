@@ -101,11 +101,11 @@ python3.11 tools/wx-clone-capture.py cleanup     # 清理副本与快照
 | 抓密钥 | ✅ `macos_clone_lldb_passphrase`，落盘 `~/.wcdb-key-tool/wechat-passphrase.json`（64 hex） |
 | 密钥登记 | ✅ 写进工具的 `account_keys.json`（保留原有图片密钥）→ 工具开始能解密 |
 | 解密验证 | ✅ `/api/sns/self_info` 返回账号信息；`/api/sns/timeline` 能读出真实朋友圈 |
-| 导出 | ✅ `POST /api/sns/exports`（`scope=selected` + 本人 username）→ `postCount: 5` |
+| 导出 | ✅ `POST /api/sns/exports`（`scope=selected` + 本人 username）→ `postCount: 34`（**第一次只拿到 5 条是工具快照冷启动，重导即得 34 条**，见下方教训） |
 | 入库 | ✅ 走真实路由 `/api/wx/import` → `/api/wx/switch` → `/api/kb/build` → `/api/profile/build` |
-| 双源画像 | ✅ 「共 **95** 条动态（QQ 空间 90 条，微信朋友圈 5 条）」+ 朋友圈专属维度全部生成 |
+| 双源画像 | ✅ 「共 **124** 条动态（QQ 空间 90 条，微信朋友圈 34 条）」+ 朋友圈专属维度全部生成 |
 | 检索 | ✅ 命中朋友圈记录，id 带 `wx-` 前缀，`[来源] 微信朋友圈`，`confident: true` |
-| 1.0 不受影响 | ✅ 纯 QQ 输入的逐字节黄金基线仍然全过（95 条里 90 条与 1.0 完全一致） |
+| 1.0 不受影响 | ✅ 纯 QQ 输入的逐字节黄金基线仍然全过（124 条里 90 条与 1.0 完全一致） |
 
 > 本机微信安装全程零改动：抓密钥走的是一次性副本，抓完已把 `/Applications/WeChat.app`
 > 还原成原版（`Identifier` / `TeamIdentifier` / `CDHash` 校验一致）。

@@ -133,6 +133,34 @@ record('画像含朋友圈专属维度', /发圈节奏|发布时段|媒体偏好
 const dualLines = (await readFile(join(DATA_DIR, 'kb', 'unified.jsonl'), 'utf8')).trim().split('\n').length;
 record('unified.jsonl 变长', dualLines > baselineLines, `${baselineLines} → ${dualLines}`);
 
+// 检索侧：对话时能不能真的检索到朋友圈内容
+const wxSearch = await call('/api/search?q=' + encodeURIComponent('钻机'));
+const hitTexts = (wxSearch.hits ?? []).map((h) => String(h.text ?? '')).join('\n');
+record('检索命中朋友圈内容', /微信朋友圈/.test(hitTexts) && /钻机/.test(hitTexts),
+  `hits=${wxSearch.hits?.length ?? 0} confident=${wxSearch.confident}`);
+
+// QQ 空间侧的检索：关键词**运行时从真实知识库里取**，
+// 不在这里硬编码任何真实内容——这个脚本是公开仓库的一部分。
+const qqKeyword = await (async () => {
+  try {
+    const lines = (await readFile(join(DATA_DIR, 'kb', 'unified.jsonl'), 'utf8')).split('\n').filter(Boolean);
+    for (const line of lines) {
+      const row = JSON.parse(line);
+      if ((row.sources ?? []).some((s) => String(s).startsWith('qzone')) && typeof row.content === 'string' && row.content.length >= 4) {
+        return row.content.slice(0, 2);
+      }
+    }
+  } catch { /* 忽略 */ }
+  return '';
+})();
+if (qqKeyword) {
+  const qqSearch = await call('/api/search?q=' + encodeURIComponent(qqKeyword));
+  record('检索 QQ 空间内容仍然正常', (qqSearch.hits?.length ?? 0) > 0,
+    `hits=${qqSearch.hits?.length ?? 0} confident=${qqSearch.confident}`);
+} else {
+  record('检索 QQ 空间内容仍然正常', false, '知识库里没取到可用样本');
+}
+
 // ── 5. 关掉 → 重建 → 必须回到纯 1.0 ───────────────────────────────────
 console.log('\n【5】关掉朋友圈 → 重建 → 必须回到纯 1.0');
 await call('/api/wx/switch', { enabled: false });

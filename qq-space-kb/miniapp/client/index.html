@@ -235,7 +235,6 @@
             查不到就说不知道。
           </p>
         </div>
-        <button id="btn-build" class="primary" type="button">构建知识库</button>
       </header>
 
       <p class="banner" id="demo-banner" hidden>
@@ -264,6 +263,9 @@
             <button id="btn-export" type="button">开始导出</button>
           </div>
           <div class="field">
+            <button id="btn-build" class="primary" type="button">构建知识库</button>
+          </div>
+          <div class="field">
             <button id="btn-stop" class="danger" type="button" hidden>停止导出</button>
           </div>
         </div>
@@ -290,6 +292,7 @@
         </div>
 
         <p class="status" id="status-line" role="status"></p>
+        <p class="note" id="stale-note" hidden></p>
         <div class="log" id="log" aria-label="导出进度"></div>
 
         <div class="stats" id="stats" hidden>
@@ -395,6 +398,7 @@
           sessionBox: document.getElementById('session-box'),
           sessionText: document.getElementById('session-text'),
           sessionHint: document.getElementById('session-hint'),
+          staleNote: document.getElementById('stale-note'),
         };
 
         var PHASE_TEXT = {
@@ -465,10 +469,24 @@
         }
 
         function renderState(state) {
-          el.phase.textContent = '状态：' + (PHASE_TEXT[state.phase] || state.phase);
+          /**
+           * 顶部状态栏显示的是「现在能做什么」，不是「上一次操作停在哪一步」。
+           *
+           * 上一轮导出结束后，服务端的 phase 会被置回 idle；但磁盘上的知识库还在、
+           * 照样能对话。这时候显示「待开始」是错的——用户会以为还没建好。
+           * 所以这里以 kbReady（有没有可用的知识库）为准来定状态。
+           */
+          var displayPhase = state.phase;
+          if (state.phase === 'exporting' || state.phase === 'building' || state.phase === 'failed') {
+            displayPhase = state.phase;
+          } else if (state.kbReady) {
+            displayPhase = 'ready';
+          }
+
+          el.phase.textContent = '状态：' + (PHASE_TEXT[displayPhase] || displayPhase);
           if (state.message) {
             el.status.textContent = state.message;
-            el.status.setAttribute('data-tone', state.phase === 'failed' ? 'error' : state.phase === 'ready' ? 'ok' : 'normal');
+            el.status.setAttribute('data-tone', displayPhase === 'failed' ? 'error' : displayPhase === 'ready' ? 'ok' : 'normal');
           }
           if (state.lastError && state.phase === 'failed') {
             el.status.textContent = state.message + '：' + state.lastError;
@@ -476,11 +494,21 @@
 
           el.btnExport.disabled = Boolean(state.exporting);
           el.btnStop.hidden = !state.exporting;
-          el.btnBuild.disabled = Boolean(state.exporting) || state.phase === 'building';
+          el.btnBuild.disabled = Boolean(state.exporting) || state.phase === 'building'
+            || !(state.hasMessages || state.hasArchive);
+          el.btnBuild.textContent = state.kbReady ? '重新构建知识库' : '构建知识库';
 
           setStep('export', state.exporting ? 'active' : state.hasMessages ? 'done' : 'idle');
-          setStep('build', state.phase === 'building' ? 'active' : state.stats && state.stats.chunkCount ? 'done' : 'idle');
-          setStep('ready', state.phase === 'ready' ? 'done' : 'idle');
+          setStep('build', state.phase === 'building' ? 'active' : state.kbReady ? 'done' : 'idle');
+          setStep('ready', state.kbReady ? 'done' : 'idle');
+
+          // 导出了新数据但还没重建：明确告诉用户知识库是旧的。
+          if (state.kbStale) {
+            el.staleNote.hidden = false;
+            el.staleNote.textContent = '新导出的数据还没进知识库。当前对话用的是上一次的构建结果，点「重新构建知识库」刷新。';
+          } else {
+            el.staleNote.hidden = true;
+          }
 
           renderSession(state.exportSession);
 

@@ -6,7 +6,7 @@
 //   3. 合并两路数据源、切知识块、建检索索引
 //   4. 对话：先检索，检索不到直接回固定话术；检索到才让 Agent 基于资料作答，并做接地校验
 
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -465,13 +465,44 @@ async function readExportSession(dataDir) {
   };
 }
 
+/**
+ * 知识库是不是「旧」的：raw 里的数据比 kb 新，说明导出过新数据但还没重建。
+ *
+ * 只看 phase 是看不出来的——导出流程结束后 phase 会被置回 idle，
+ * 但知识库还在、照样能对话。页面上必须说清「现在对话用的是上一次的构建结果」。
+ */
+async function isKbStale(store) {
+  let kbTime = 0;
+  try {
+    kbTime = (await stat(store.chunksPath)).mtimeMs;
+  } catch {
+    return false; // 还没有知识库，谈不上过期
+  }
+  if (!kbTime) return false;
+  for (const path of [store.messagesPath, store.archivePath]) {
+    try {
+      const rawTime = (await stat(path)).mtimeMs;
+      // 1 秒容差：写盘和建库可能在同一秒内完成，别误报。
+      if (rawTime > kbTime + 1000) return true;
+    } catch {
+      // 这个原始文件不存在，跳过
+    }
+  }
+  return false;
+}
+
 async function snapshot(runtime) {
   const { store } = runtime;
   await store.loadState();
   const raw = await store.listRaw();
   const exportSession = await readExportSession(store.dataDir);
+  // 有没有可用的知识库——比 phase 更能说明「现在能不能聊」。
+  const kbReady = Boolean(store.state.stats?.chunkCount);
+  const kbStale = kbReady ? await isKbStale(store) : false;
   return {
     phase: store.state.phase,
+    kbReady,
+    kbStale,
     message: store.state.message,
     progress: store.state.progress ?? [],
     stats: store.state.stats,
@@ -600,9 +631,13 @@ async function startExport(runtime, body) {
       runtime.exportSessionId = result.sessionId ?? runtime.exportSessionId;
       if (result.status === 'finished') {
         await store.appendProgress({ kind: 'done', text: '导出流程结束' });
+        // 说清楚「现在处于什么状态」：有没有旧知识库，决定了后面那句话怎么写。
+        const hadKb = Boolean(store.state.stats?.chunkCount);
         await store.saveState({
           phase: PHASE.IDLE,
-          message: '导出流程已结束，请检查文件是否就绪后点击「构建知识库」',
+          message: hadKb
+            ? '导出流程已结束。知识库还是上一次的结果，点「重新构建知识库」用新数据重建。'
+            : '导出流程已结束，点「构建知识库」把说说建成知识库。',
         });
       } else if (result.status === 'aborted') {
         await store.saveState({ phase: PHASE.IDLE, message: '导出已取消' });

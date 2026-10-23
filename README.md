@@ -16,7 +16,7 @@
 
 **方式一：直接导入 zip**（推荐给不想折腾 git 的人）
 
-下载 [`releases/qq-space-kb-1.5.0.zip`](releases/qq-space-kb-1.5.0.zip)，
+下载 [`releases/qq-space-kb-1.6.0.zip`](releases/qq-space-kb-1.6.0.zip)，
 在 MCode 里安装 Mini App 时选择这个包。
 
 **方式二：clone 后本地安装**
@@ -32,10 +32,13 @@ git clone https://github.com/Yzero123/qq-space-kb.git
 
 > 打开我的 QQ 空间说说知识库，导出历史说说并建库。
 
-Agent 会驱动导出工具打开 QQ 空间登录页，**你用手机 QQ 扫码**完成登录（这一步只能你本人做），
+会弹出一个 QQ 空间浏览器窗口，**你用手机 QQ 扫码**完成登录（这一步只能你本人做），
 然后抓取全量说说、评论、点赞、定位和图片。抓取过程很慢（每页间隔 20 秒，每 10 页休息 3 分钟），
 这是为了降低风控，别催它。
 
+> **全程只需要扫这一次码。** 导出和回溯共用同一个常驻浏览器，登录态一直挂着。
+> ⚠️ **别关掉那个浏览器窗口**——QQ 空间的登录态是会话 cookie，窗口一关就失效。
+>
 > ⚠️ **抓取期间不要切换 QQ 客户端账号**，有账号冻结风险。
 > **浏览器被关掉就是你要中止**——程序不会自动重开。断点会留着，再点一次「开始导出」从断点续上。
 
@@ -52,7 +55,7 @@ Agent 会驱动导出工具打开 QQ 空间登录页，**你用手机 QQ 扫码*
 
 | 阶段 | 动作 | 结果 |
 |---|---|---|
-| ① 导出 | 手机 QQ 扫码，Agent 驱动抓取全量说说 | `messages.json`（含评论/点赞/定位/图片） |
+| ① 导出 | 手机 QQ 扫**一次**码，Agent 驱动抓取全量说说 | `messages.json`（含评论/点赞/定位/图片） |
 | ② 建库 | 两路数据按说说 ID 合并去重，切明细块与年度画像块 | 可检索的知识库 + 索引 |
 | ③ 人物画像 | 归纳时间线、社交圈、说话方式、性格 | 一份「我是谁」底色，注入每轮对话 |
 | ④ 对话 | 先检索，检索不到直接回固定话术；命中才让模型基于资料作答 | 有依据的回答，附来源 |
@@ -61,6 +64,11 @@ Agent 会驱动导出工具打开 QQ 空间登录页，**你用手机 QQ 扫码*
 
 几个设计上花了力气的地方：
 
+- **全程只扫一次码**。QQ 空间的 `uin` / `p_skey` 是会话 cookie，浏览器一关就没了——
+  早期版本「导出开一个浏览器 → 抓完关掉 → 回溯再开一个浏览器」，于是每一步都要重新扫码。
+  现在把浏览器变成**独立长驻进程**（运行器自己起系统 Chrome，带调试端口和持久化 profile），
+  导出和回溯都通过 CDP 挂上去复用同一份登录态。
+  关键机制（已实测）：`connectOverCDP()` 后调用 `browser.close()` **只断开客户端，Chrome 进程和调试端口都还活着**。
 - **已删除说说的回溯**。优先读本机归档库，没有就走互动中心的历史消息接口——
   被点赞评论过的已删除说说会在那里留下痕迹。差集里混着「我评论过的别人的动态」，
   靠说说 ID 前 8 位（小端 u32 = 作者 QQ 号）区分作者，不是本人的丢掉。
@@ -99,16 +107,18 @@ qq-space-kb/
 │   └── qq-space-kb-visualizer/  # 派生可视化技能（用户自有，含完整 GenUI 基础拷贝）
 ├── agents/qzone-persona.md      # 人设子代理
 ├── tools/
+│   ├── qzone_session.js         # 常驻浏览器会话管理器（一次扫码的关键）
 │   └── qzone_feed_recover.js    # 已删除说说回溯探针（实测可用）
 └── tests/
-    ├── test.mjs                 # 103 项回归断言
+    ├── test.mjs                 # 104 项回归断言
+    ├── export-session.mjs       # 「一次扫码」回归：会话管理器 / 编排器 / 接线 / 页面
     ├── mcp-smoke.mjs            # MCP 服务器冒烟测试
     ├── visualizer-static.mjs    # 可视化样例静态审查
     └── plugin-package.mjs       # 插件包结构校验
 
 qq-kb-pipeline/                   # 早期 Python 参考实现（合并/切块/摘要 + AstrBot 接入）
 QQ空间说说知识库方案.md           # 选型调研 + 关键工程点复盘
-releases/qq-space-kb-1.5.0.zip   # 可直接导入的安装包
+releases/qq-space-kb-1.6.0.zip   # 可直接导入的安装包
 ```
 
 Node 侧只用内置模块，**没有 npm 运行时依赖**；页面不加载任何远程资源。
@@ -146,7 +156,8 @@ Node 侧只用内置模块，**没有 npm 运行时依赖**；页面不加载任
 
 ```bash
 cd qq-space-kb
-node tests/test.mjs              # 103 项断言
+node tests/test.mjs              # 104 项断言
+node tests/export-session.mjs    # 43 项断言：一次扫码（会话管理器 / 编排器 / 接线 / 页面）
 node tests/mcp-smoke.mjs         # MCP 服务器冒烟：真启动、真发 JSON-RPC、真调五个工具
 node tests/visualizer-static.mjs # 可视化样例静态审查：信封、主题 token、安全、载荷
 node tests/plugin-package.mjs    # 插件包结构校验：清单、路径、包体积、frontmatter、凭证

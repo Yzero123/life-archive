@@ -8,6 +8,7 @@
 
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import {
@@ -51,157 +52,182 @@ const EXPORT_INSTRUCTION = `请帮用户完成一次 QQ 空间历史说说的全
 2. \`<RAW_DIR>/qzone_archive.json\` —— 已删除说说的回溯结果，格式为 {"dynamics": [...], "feeds": [...]}。
    **即使一条都没捞到也要写这个文件**（空数组），这样界面能区分「没捞到」和「根本没试」。
 
-## 铁律（这几条是踩过坑换来的，务必遵守）
-1. **只启动一次抓取，不要写任何自动重跑循环。** 不要写 supervisor、守护进程、while 循环去反复重启抓取脚本。
-   反复重开浏览器会把用户逼疯，而且每次都要重新扫码登录。
-2. **抓取脚本必须完全挂到后台**（独立进程组 / setsid），绝不能挂在一次前台工具调用里。
-   前台调用一旦到达时限就会把进程连同浏览器一起杀掉，用户看到的就是「页面还没加载完就自动关闭」。
-3. **浏览器被关闭 = 用户主动中止，立刻停下来报告，不要自动重开浏览器。**
-   断点会保留在 result 目录里，用户自己会再点一次「开始导出」续跑。
-4. 不要删除 \`resource/temp/chrome-profile\`（那是登录态），不要换浏览器 profile。
+## 本次流程只扫码一次
+导出和回溯共用**同一个常驻浏览器**——运行器自己起系统 Chrome，带调试端口和持久化 profile，
+导出跑完**不关它**，回溯再挂上去复用同一份登录态。
+
+QQ 空间的 uin / p_skey 是**会话 cookie**，浏览器一关就没。所以：
+- ✅ 浏览器窗口开着的时候，全程只需要用户**扫码一次**（扫码 + 手机 QQ 点「确认登录」两步）。
+- ❌ **不要关掉那个浏览器窗口**，不要删它的 profile 目录
+  （\`<WORK_DIR>/resource/temp/chrome-profile-session\`），不要另起浏览器、不要换 profile。
+
+## 铁律
+1. **只启动一次，不要写任何自动重跑循环。** 不要写 supervisor、守护进程、while 循环去反复重启。
+   反复重开浏览器会把用户逼疯，而且每次都要重新扫码。
+2. **运行器必须挂后台**，绝不能挂在一次前台工具调用里——它要等用户扫码，可能十几分钟。
+   运行器自己会处理这件事：调用一次之后你只管轮询状态文件。
+3. **浏览器被关闭 = 用户主动中止**，立刻停下来报告，不要自动重开。
+   断点保留在 result 目录里，用户自己会再点一次「开始导出」续跑。
+4. **回溯必须复用常驻浏览器的 CDP 端点**（状态文件里的 \`cdpUrl\`），不要自己开浏览器。
+5. 登录态看着空了（服务端把 cookie 重新下发成空值）时，先跑 \`revisit\` 把它拉回来，
+   **不要直接让用户重新扫码**——浏览器还开着，重新访问一次空间首页就能补回来。
 
 ## 步骤
 
-0. 用下面的运行器启动导出。它负责 clone 工具、装依赖、把抓取脚本挂到后台，并写状态文件：
-   \`\`\`
-   python3 "<RUNNER_PATH>" --status "<STATUS_PATH>" --work-dir /tmp/qq-space-export-work --owner <QQ号>
-   \`\`\`
-   它会立刻返回，并打印 PID 与状态文件路径。
+### 0. 启动导出流水线
 
-1. 告诉用户：「导出已经在后台开始，浏览器窗口会弹出，请用手机 QQ 扫码登录 QQ 空间。」
-   然后**不要**盯着长命令，用短命令轮询状态文件：
-   \`\`\`
-   cat "<STATUS_PATH>"
-   tail -20 /tmp/qq-space-export-work/export-run.log
-   \`\`\`
-   状态还是 running 就隔一会儿再报一次进度（已抓页数、累计条数），**绝不要重新启动**。
+\`<PLUGIN_ROOT>\` 是插件根目录（下面要用它下面的 tools/），\`<WORK_DIR>\` 是工作目录。
 
-2. 落盘：抓取结束后，把 \`get-qzone-history/resource/result/\` 里的 messages JSON 转成
-   \`<RAW_DIR>/qzoneexport_messages.json\`（数组格式）。**这一步不能直接复制**——工具的原始输出
-   和下面的字段对不上，直接复制会丢掉图片、点赞数也会被转发数顶替。
+\`\`\`
+python3 "<RUNNER_PATH>" --status "<STATUS_PATH>" --plugin-root "<PLUGIN_ROOT>" --work-dir <WORK_DIR> --owner <QQ号>
+\`\`\`
 
-   目标字段（Mini App 的解析器只认这些）：
+它会立刻返回（挂后台），并打印状态文件路径。**只调用这一次**，之后只轮询。
 
-   | 目标字段 | 取自 | 说明 |
-   |---|---|---|
-   | \`tid\` | \`tid\` | 说说 ID，原样 |
-   | \`content\` | \`content\` | 正文 |
-   | \`custom_content\` | 同 \`content\` | 解析器优先读这个 |
-   | \`created_time\` | **从 DOM 里取** | **必须是 unix 秒级时间戳**。工具输出的 \`created_time\` 是「2021年5月6日 赞评论转发更多 编辑 收藏 详情 删除」这种显示字符串，直接用会让整条时间轴失效 |
-   | \`custom_create_time\` | \`2021-05-06 15:13\` 形式 | 备用时间，写标准 \`YYYY-MM-DD HH:mm\` |
-   | \`likeTotal\` | DOM 里的**赞**数 | ⚠️ 工具的 \`like_count\` 抓到的是**转发**数（「评论(20)转发(490)」里 490 是转发），必须从 DOM 重新取赞数 |
-   | \`commentlist\` | DOM 里的评论条目 | 每条含 \`content\` / \`nick\` / \`createTime\` / \`replys\` |
-   | \`cmtnum\` / \`fwdnum\` | DOM 里的评论数 / 转发数 | |
-   | \`lbs\` | \`{"name":..,"address":..,"idname":..}\` | 定位，从 DOM 的定位文案取 |
-   | \`pic\` | 图片数组 | 每项放 \`{"hd_url":..,"b_url":..}\`，用 \`image_urls\` 里已下载的本地文件路径 |
-   | \`video\` | 视频数组 | 每项放 \`{"play_url":..}\` |
-   | \`post_url\` | \`https://user.qzone.qq.com/<QQ号>/mood/<tid>\` | |
-   | \`uin\` | 你的 QQ 号 | |
-   | \`source_name\` | 你的昵称 | |
+### 1. 告诉用户扫码（就这一次）
 
-   时间和赞数如果从工具的 JSON 拿不准，就从页面 DOM 里取（之前就是这么做的，能拿到 45 条精确到秒的时间和 6408 个赞）。
+读状态文件：
 
-3. **回溯已删除说说**（这一步最容易被跳过，跳过了用户会以为功能坏了）：
-   a. 先找本机归档库（QQ-Zone-Restore-Archive 的 SQLite），依次检查：
-      - macOS: \`~/Library/Application Support/top.ehre.qzonearchive/qzone-archive.sqlite3\`
-      - Windows: \`%APPDATA%\\top.ehre.qzonearchive\\qzone-archive.sqlite3\`
-      - 都没找到就搜一遍：\`find ~ -maxdepth 6 -iname "qzone-archive*.sqlite3" 2>/dev/null\`
-      找到了就按第 4 步的方式转成 JSON。**找不到就跳过，绝不编造**。
-   b. 本机没有归档库，就走**互动中心的历史消息**这条路：已删除但仍被人点赞评论的说说，
-      会在**历史消息卡片**里留下痕迹——卡片带 \`//user.qzone.qq.com/<QQ号>/mood/<cell_id>\` 链接，
-      而这个 cell_id 不在当前说说列表里。
+\`\`\`
+cat "<STATUS_PATH>"
+\`\`\`
 
-      接口（QQ-Zone-Restore-Archive 逆向出来的，公开可查）：
-      \`\`\`
-      https://user.qzone.qq.com/proxy/domain/ic2.qzone.qq.com/cgi-bin/feeds/feeds2_html_pav_all
-      ?uin=<QQ号>&begin_time=0&end_time=0&getappnotification=1&getnotifi=1
-      &has_get_key=0&offset=<n>&set=0&count=30&useutf8=1&outputhtmlfeed=1&scope=1
-      &format=jsonp&g_tk=<hash33(p_skey)>
-      \`\`\`
-      - 返回 JSONP，html 字段是转义过的卡片 HTML（\`\\x3C\` → \`<\`），解出来再解析。
-      - 卡片形如 \`<li class="f-single f-s-s" data-key="fct_<uin>_<family>_<subtype>_<time>">\`，
-        正文通常在 \`<p class="txt-box-title">\`，时间在 \`data-time\`。
-        正文不一定挂在这个标签上（也可能被 span/div 包裹，或在 data-text / title 属性里），
-        多试几个来源再放弃。
-        family：217=赞，311=评论，334=留言板。
-      - \`count\` 必须 ≤ 30（100 会返回空），\`offset\` 按 30 递增翻页。
-      - 把差集里的 cell_id 挑出来，按同样格式写进 qzone_archive.json：
-        dynamics 每条含 cell_id / published_at / content / author_uin / is_history_residue:true。
-      - ⚠️ **只收「内容是本人发的」那些**。互动卡片里混着「我评论过的别人的动态」，
-        这类内容本来就不在「我的说说列表」里，所以差集里必然混着它们。
-        说说 ID 的**前 8 位十六进制（小端 u32）就是作者 QQ 号**，用它过滤：
-        作者不是本人就丢掉。收进来的话，bot 会声称自己发过根本没发过的内容——
-        这比漏回溯一条严重得多。
-      - ⚠️ **差集里没抽到正文的条目也要写进去**（\`content\` 留空字符串，**不要丢**）。
-        已删除的说说在互动卡片里常常只剩时间戳和 cell_id，正文预览未必还在；
-        但只要有 cell_id，发布时间就能由 ID 反解出来，
-        「发过、什么时候发、被谁互动过」本身就是真实知识。
-        把没正文的条目过滤掉，回溯条数会永远是 0，看起来像功能没做。
-      - 卡片上的 \`data-time\` 是**互动时间**，不是发布时间。落盘时标上
-        \`published_from: "interaction"\`；真正的发布时间由 cell_id 反解，
-        反解不了时至少要如实标成「互动时间近似」，不能冒充精确时间。
-      - 差集为空就写空的 \`{"dynamics": [], "feeds": []}\`，如实说明。
+- \`state\` 是 \`waiting_login\` → 告诉用户：「浏览器窗口已经打开，请用手机 QQ 扫码登录 QQ 空间，
+  **并在手机上点「确认登录」**。整个流程只需要扫这一次，后面回溯也不用再扫。」
+  然后隔一会儿再读一次状态文件汇报进度。**不要重复启动运行器。**
+- \`state\` 是 \`exporting\` → 抓取中。看 \`<WORK_DIR>/export-run.log\` 尾部汇报进度
+  （已抓页数、累计条数）。**绝不要重新启动。**
+- \`state\` 是 \`failed\` → 读 \`error\` 字段，如实报告给用户。
 
-      写探针时的硬要求：
-      - ⚠️ **优先用包内现成的探针**：\`<插件目录>/tools/qzone_feed_recover.js\`
-        （已实测跑通，把下面这些坑都处理了）。用法：
-        \`NODE_PATH=<导出工具目录>/node_modules node <插件目录>/tools/qzone_feed_recover.js
-        --target-qq <QQ号> --shuoshuo <导出产物 messages.json> --out <RAW_DIR>/qzone_archive.json
-        --work-dir /tmp/qq-space-export-work --login-timeout 900 --max-pages 20\`
-        下面这些要求是**自己重写探针时**才要照着做的。
-      - **必须用系统 Chrome**：\`chromium.launchPersistentContext\` 要显式传 \`executablePath\`
-        （macOS: \`/Applications/Google Chrome.app/Contents/MacOS/Google Chrome\`），
-        否则会去用 Playwright 自带的 chromium，本机往往没装（\`npx playwright install\`）。
-      - **必须等抓取脚本完全退出后再跑**：同一个 user-data-dir 不能被两个 Chrome 同时打开。
-      - 探针的原始响应先落盘（如 \`feed-raw-dump.json\`），再从里面算差集，别只看接口返回的条数。
-      - ⚠️ **每翻一页就落一次盘**（原始 dump 和 qzone_archive.json 都写）。
-        这个接口被 WAF 拦是常态，中途断掉时，已经拿到的卡片不能跟着一起丢。
-      - ⚠️ **请求按需发**：同一页先试桌面 cookie 头，拿到内容就直接用，
-        别把三条通道都打一遍——每页多打两个请求，很容易撞上 WAF 限流。
-      - ⚠️ **QQ 空间的 \`uin\` / \`p_skey\` 是会话 cookie，浏览器一关就没了。**
-        持久化的 chrome-profile 里只剩 ptlogin2 的 cookie，回溯探针必须在自己的浏览器窗口里**再登一次**。
-        所以探针要留足等待时间（建议 15 分钟）并明确提示用户扫码，别指望复用上一次的登录态。
-      - ⚠️ **判断「登录好了」必须看 \`p_skey\`，不能只看 \`uin\`**。
-        持久化 profile 里常留着 \`uin\` / \`skey\` 的残骸（名字还在、值也短），
-        光有它们接口一律回 \`code:-3000 need login\`。判定条件：
-        \`uin\` 有效 **且** \`p_skey\` 存在且长度正常（>10）。
-        只扫码不点手机 QQ 的「确认登录」，\`p_skey\` 不会下发——
-        提示用户时要说明「扫码 + 手机确认」两步，缺一个都拿不到数据。
-        踩过的坑：把残留 \`uin\` 当成登录就绪，直接跳过等待，空跑十分钟才发现根本没登上。
-      - ⚠️ **这个接口要桌面端会话**。两种发法都试，哪种通用用哪种：
-        a. **显式带桌面 cookie 头**（照 QQ-Zone-Restore-Archive 的做法，最稳）：
-           从浏览器 cookies 里取 \`uin\` / \`skey\` / \`p_uin\` / \`pt4_token\` / \`p_skey\`
-           拼成 \`uin=o<QQ号>; skey=..; p_uin=o<QQ号>; pt4_token=..; p_skey=..\`，
-           再配上桌面 Referer（\`https://user.qzone.qq.com/<QQ号>/main\`）和桌面 UA，
-           用 \`context.request.get(url, { headers: { cookie, referer, 'user-agent' } })\` 发。
-        b. 页面内同源 \`fetch(url, {credentials:'include'})\`：
-           页面必须先停在 \`https://user.qzone.qq.com/<QQ号>/main\`。
-           页面停在别的域（比如 i.qq.com 登录中转页）会被 CORS 掐掉，
-           表现是 \`TypeError: Failed to fetch\`（status 0），看起来像没登录。
-      - ⚠️ **cookie 要在「页面真的停在 user.qzone.qq.com 上」之后才取全**。
-        扫码后页面会先落到 i.qq.com 登录中转页，这时 QZone 的 \`p_skey\` / \`pt4_token\`
-        还没下发；而一旦页面停在 i.qq.com 上，服务端又会把这些 cookie 重新下发成**空值**
-        （名字还在、值没了）。所以：等页面自己跳回 user.qzone.qq.com，再取 cookie，
-        并且全程保留「字段最全」的那次快照。
-      - ⚠️ **会被腾讯 WAF 限流**：请求太密会返回 HTTP 501 + \`waf.tencent.com\` 页面。
-        看到这个就退避重试（等 30 秒以上），翻页之间也留 3–5 秒。
-        一次完整回溯不要反复重跑——跑得越勤，冷却越久。
-   c. 归档库和历史消息都没有 → 写一个空的 \`{"dynamics": [], "feeds": []}\`，
-      并在报告里明确写：**本机既没有 QQ 客户端缓存，也没有归档库，已删除说说无法回溯**。这不是导出失败。
+状态文件里还带 \`cdpUrl\`（常驻浏览器的调试端点）、\`browserPid\`、\`uin\`、\`log\`、\`sessionState\`——回溯要用。
 
-4. 归档库转 JSON（第 3 步 a 找到了库才做）：
-   - dynamics 表取 cell_id, published_at, content, author_uin, author_name, category, pictures_json, video_json
-   - feeds 表取 cell_id, event_type, event_time, actor_uin, actor_name, comments_json, event_summary, feed_key
-   - 每条 dynamics 额外计算 is_history_residue：是否存在同 owner_uin 同 cell_id 且 feed_key LIKE 'history-v2-event:%' 的 feed
-   - 输出 {"dynamics": [...], "feeds": [...]} 到 \`<RAW_DIR>/qzone_archive.json\`
+### 2. 落盘：把工具产物转成 messages.json
 
-5. 收尾报告要包含：实际抓到的条数、覆盖年份区间、评论/点赞/图片数、文件是否写入成功，
-   以及回溯到多少条已删除说说（**0 条也要说清原因**）。
+抓取结束后，把 \`get-qzone-history/resource/result/\` 里的 messages JSON 转成
+\`<RAW_DIR>/qzoneexport_messages.json\`（数组格式）。**这一步不能直接复制**——工具的原始输出
+和下面的字段对不上，直接复制会丢掉图片、点赞数也会被转发数顶替。
 
-## 约束
-- 只处理用户本人账号的数据，不要抓取他人的空间。
-- 遇到验证码、风控提示，提示用户稍后再试，不要尝试绕过。
-- 如果某一步失败，明确说明失败原因和已经完成的部分，不要用占位数据伪装成功。`;
+目标字段（Mini App 的解析器只认这些）：
+
+| 目标字段 | 取自 | 说明 |
+|---|---|---|
+| \`tid\` | \`tid\` | 说说 ID，原样 |
+| \`content\` | \`content\` | 正文 |
+| \`custom_content\` | 同 \`content\` | 解析器优先读这个 |
+| \`created_time\` | **从 DOM 里取** | **必须是 unix 秒级时间戳**。工具输出的 \`created_time\` 是「2021年5月6日 赞评论转发更多 编辑 收藏 详情 删除」这种显示字符串，直接用会让整条时间轴失效 |
+| \`custom_create_time\` | \`2021-05-06 15:13\` 形式 | 备用时间，写标准 \`YYYY-MM-DD HH:mm\` |
+| \`likeTotal\` | DOM 里的**赞**数 | ⚠️ 工具的 \`like_count\` 抓到的是**转发**数（「评论(20)转发(490)」里 490 是转发），必须从 DOM 重新取赞数 |
+| \`commentlist\` | DOM 里的评论条目 | 每条含 \`content\` / \`nick\` / \`createTime\` / \`replys\` |
+| \`cmtnum\` / \`fwdnum\` | DOM 里的评论数 / 转发数 | |
+| \`lbs\` | \`{"name":..,"address":..,"idname":..}\` | 定位，从 DOM 的定位文案取 |
+| \`pic\` | 图片数组 | 每项放 \`{"hd_url":..,"b_url":..}\`，用 \`image_urls\` 里已下载的本地文件路径 |
+| \`video\` | 视频数组 | 每项放 \`{"play_url":..}\` |
+| \`post_url\` | \`https://user.qzone.qq.com/<QQ号>/mood/<tid>\` | |
+| \`uin\` | 你的 QQ 号 | |
+| \`source_name\` | 你的昵称 | |
+
+时间和赞数如果从工具的 JSON 拿不准，就从页面 DOM 里取（之前就是这么做的，能拿到 45 条精确到秒的时间和 6408 个赞）。
+
+### 3. 回溯已删除说说（复用同一个浏览器，不用再扫码）
+
+这一步最容易被跳过，跳过了用户会以为功能坏了。
+
+**a. 先把登录态拉回来（不重新扫码）。** 抓取过程中浏览器可能换过页面，
+服务端会把 QZone 的会话 cookie 重新下发成空值。跑一次这个，它会重新访问空间首页、
+凭还在的 SSO 会话把 cookie 补回来：
+
+\`\`\`
+node "<PLUGIN_ROOT>/tools/qzone_session.js" revisit --state <WORK_DIR>/qzone-session.json --timeout 60
+\`\`\`
+
+返回的 \`loginReady\` 为 true 就继续；为 false 才需要让用户再扫一次（**在同一个窗口里扫，不用重启任何东西**）。
+
+**b. 先找本机归档库**（QQ-Zone-Restore-Archive 的 SQLite），依次检查：
+- macOS: \`~/Library/Application Support/top.ehre.qzonearchive/qzone-archive.sqlite3\`
+- Windows: \`%APPDATA%\\top.ehre.qzonearchive\\qzone-archive.sqlite3\`
+- 都没找到就搜一遍：\`find ~ -maxdepth 6 -iname "qzone-archive*.sqlite3" 2>/dev/null\`
+  找到了就按第 4 步的方式转成 JSON。**找不到就跳过，绝不编造**。
+
+**c. 本机没有归档库，就走互动中心的历史消息**：已删除但仍被人点赞评论的说说，
+会在**历史消息卡片**里留下痕迹——卡片带 \`//user.qzone.qq.com/<QQ号>/mood/<cell_id>\` 链接，
+而这个 cell_id 不在当前说说列表里。
+
+接口（QQ-Zone-Restore-Archive 逆向出来的，公开可查）：
+\`\`\`
+https://user.qzone.qq.com/proxy/domain/ic2.qzone.qq.com/cgi-bin/feeds/feeds2_html_pav_all
+?uin=<QQ号>&begin_time=0&end_time=0&get_appnotification=1&getnotifi=1
+&has_get_key=0&offset=<n>&set=0&count=30&useutf8=1&outputhtmlfeed=1&scope=1
+&format=jsonp&g_tk=<hash33(p_skey)>
+\`\`\`
+- 返回 JSONP，html 字段是转义过的卡片 HTML（\`\\x3C\` → \`<\`），解出来再解析。
+- 卡片形如 \`<li class="f-single f-s-s" data-key="fct_<uin>_<family>_<subtype>_<time>">\`，
+  正文通常在 \`<p class="txt-box-title">\`，时间在 \`data-time\`。
+  正文不一定挂在这个标签上（也可能被 span/div 包裹，或在 data-text / title 属性里），
+  多试几个来源再放弃。
+  family：217=赞，311=评论，334=留言板。
+- \`count\` 必须 ≤ 30（100 会返回空），\`offset\` 按 30 递增翻页。
+- 把差集里的 cell_id 挑出来，按同样格式写进 qzone_archive.json：
+  dynamics 每条含 cell_id / published_at / content / author_uin / is_history_residue:true。
+- ⚠️ **只收「内容是本人发的」那些**。互动卡片里混着「我评论过的别人的动态」，
+  这类内容本来就不在「我的说说列表」里，所以差集里必然混着它们。
+  说说 ID 的**前 8 位十六进制（小端 u32）就是作者 QQ 号**，用它过滤：
+  作者不是本人就丢掉。收进来的话，bot 会声称自己发过根本没发过的内容——
+  这比漏回溯一条严重得多。
+- ⚠️ **差集里没抽到正文的条目也要写进去**（\`content\` 留空字符串，**不要丢**）。
+  已删除的说说在互动卡片里常常只剩时间戳和 cell_id，正文预览未必还在；
+  但只要有 cell_id，发布时间就能由 ID 反解出来，
+  「发过、什么时候发、被谁互动过」本身就是真实知识。
+  把没正文的条目过滤掉，回溯条数会永远是 0，看起来像功能没做。
+- 卡片上的 \`data-time\` 是**互动时间**，不是发布时间。落盘时标上
+  \`published_from: "interaction"\`；真正的发布时间由 cell_id 反解，
+  反解不了时至少要如实标成「互动时间近似」，不能冒充精确时间。
+- 差集为空就写空的 \`{"dynamics": [], "feeds": []}\`，如实说明。
+
+**d. 用包内现成的探针**（已实测跑通，把上面这些坑都处理了），关键是**带上 \`--cdp\`**：
+
+\`\`\`
+NODE_PATH=<导出工具目录>/node_modules node "<PLUGIN_ROOT>/tools/qzone_feed_recover.js" \\
+  --target-qq <QQ号> --shuoshuo <导出产物 messages.json> --out <RAW_DIR>/qzone_archive.json \\
+  --cdp <状态文件里的 cdpUrl> --work-dir <WORK_DIR> --login-timeout 300 --max-pages 20
+\`\`\`
+
+带 \`--cdp\` 之后它**挂到常驻浏览器上**，复用已有登录态，**不会新开浏览器、不需要再扫码**，
+跑完也不会把常驻浏览器带走（CDP 连接下的 \`browser.close()\` 只断开客户端）。
+不传 \`--cdp\` 就会退回老行为（自己开浏览器、需要在这个窗口里再登一次）——**别那样用**。
+
+自己重写探针时还要照着做的硬要求：
+- **必须用系统 Chrome**：\`chromium.launchPersistentContext\` 要显式传 \`executablePath\`
+  （macOS: \`/Applications/Google Chrome.app/Contents/MacOS/Google Chrome\`），
+  否则会去用 Playwright 自带的 chromium，本机往往没装（\`npx playwright install\`）。
+- **判断「登录好了」必须看 \`p_skey\`，不能只看 \`uin\`**。
+  持久化 profile 里常留着 \`uin\` / \`skey\` 的残骸（名字还在、值也短），
+  光有它们接口一律回 \`code:-3000 need login\`。判定条件：
+  \`uin\` 有效 **且** \`p_skey\` 存在且长度正常（>10）。
+  只扫码不点手机 QQ 的「确认登录」，\`p_skey\` 不会下发——
+  提示用户时要说明「扫码 + 手机确认」两步，缺一个都拿不到数据。
+  踩过的坑：把残留 \`uin\` 当成登录就绪，直接跳过等待，空跑十分钟才发现根本没登上。
+- 探针的原始响应先落盘（如 \`feed-raw-dump.json\`），再从里面算差集，别只看接口返回的条数。
+- ⚠️ **每翻一页就落一次盘**（原始 dump 和 qzone_archive.json 都写）。
+  这个接口被 WAF 拦是常态，中途断掉时，已经拿到的卡片不能跟着一起丢。
+- ⚠️ **请求按需发**：同一页先试桌面 cookie 头，拿到内容就直接用，
+  别把三条通道都打一遍——每页多打两个请求，很容易撞上 WAF 限流。
+- 腾讯 WAF 会限流（HTTP 501 + \`waf.tencent.com\`）：被拦就退避 30 秒再试，
+  翻页之间留 3–5 秒；一次回溯别反复重跑，跑得越勤冷却越久。
+
+### 4. 归档库转 JSON（只在第 3 步 b 找到归档库时才需要）
+
+读 SQLite 里的说说表，字段对齐 \`{"dynamics": [...], "feeds": [...]}\`：
+- \`dynamics\`：每条含 \`cell_id\` / \`published_at\` / \`content\` / \`author_uin\`。
+- \`published_at\` 用 unix 秒级时间戳；反解不出来就留 0，不要编一个日期。
+- \`author_uin\` 用 cell_id 前 8 位小端 u32 解出来的作者 QQ 号。
+
+## 完成
+
+两个产物都写好后，回报给用户：说说总条数、覆盖年份区间、其中回溯回来多少条、
+其中多少条正文没能恢复。**数字要如实说，回溯为 0 就说 0 并说明为什么**，
+不要拿「应该差不多是这个量级」糊弄过去。
+`;
+
 
 
 const CHAT_SYSTEM = `你是一个以用户本人身份说话的 QQ 聊天机器人。你的全部依据来自下面提供的「知识库资料」和「你是谁」。
@@ -389,10 +415,58 @@ function readBody(request) {
 // ---------------------------------------------------------------------------
 // 状态快照
 // ---------------------------------------------------------------------------
+
+/** 进程是否还活着（用来判断常驻浏览器有没有被用户关掉）。 */
+function isPidAlive(pid) {
+  if (!pid) return false;
+  try {
+    process.kill(Number(pid), 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 读导出状态文件，整理成页面能直接显示的形状。
+ *
+ * 这里最要紧的是 **browserAlive**（常驻浏览器还活着吗）和 **loginReady**（登录态就绪吗）：
+ * 用户最怕的就是「又要重扫一次」，页面必须把「浏览器还开着、登录态还在」
+ * 这件事明确说出来——只要浏览器还活着，下一次扫码就是在这个窗口里补扫一次。
+ */
+async function readExportSession(dataDir) {
+  const statusPath = join(dataDir, 'export', 'export-status.json');
+  let status = null;
+  try {
+    status = JSON.parse(await readFile(statusPath, 'utf8'));
+  } catch {
+    return null;
+  }
+  if (!status || typeof status !== 'object') return null;
+  const browserAlive = isPidAlive(status.browserPid);
+  const loginReady = Boolean(status.loginReady);
+  return {
+    state: String(status.state ?? ''),
+    message: String(status.message ?? ''),
+    error: String(status.error ?? ''),
+    // cdpUrl 只回环地址 + 端口，没有敏感信息，但也没必要给页面完整串
+    cdpEndpoint: status.cdpUrl ? String(status.cdpUrl).replace(/^https?:\/\//, '') : '',
+    browserAlive,
+    browserPid: status.browserPid ?? null,
+    loginReady,
+    uin: status.uin ?? '',
+    exportPid: status.exportPid ?? null,
+    workDir: status.workDir ?? '',
+    log: status.log ?? '',
+    updatedAt: status.updatedAt ?? null,
+  };
+}
+
 async function snapshot(runtime) {
   const { store } = runtime;
   await store.loadState();
   const raw = await store.listRaw();
+  const exportSession = await readExportSession(store.dataDir);
   return {
     phase: store.state.phase,
     message: store.state.message,
@@ -419,6 +493,8 @@ async function snapshot(runtime) {
         }
       : null,
     exporting: Boolean(runtime.exportController),
+    // 导出流水线（常驻浏览器 / 登录态）状态，页面用来显示「只扫一次」
+    exportSession,
     fallbackAnswer: FALLBACK_ANSWER,
   };
 }
@@ -430,6 +506,9 @@ async function snapshot(runtime) {
  * 把导出运行器写进数据目录，交给 Agent 调用。
  * 运行器的内容随包发布，Agent 不需要自己即兴写启动脚本——
  * 之前的问题正是 Agent 自行写了个无限重启的监督器，把浏览器反复弹给用户。
+ *
+ * 同时把插件根目录一起交出去：运行器要用它下面的 `tools/qzone_session.js`
+ * 来管常驻浏览器（一次扫码的关键）。
  */
 async function prepareExportRunner(runtime) {
   const dir = join(runtime.store.dataDir, 'export');
@@ -437,7 +516,14 @@ async function prepareExportRunner(runtime) {
   const runnerPath = join(dir, 'qq_export_runner.py');
   const source = join(runtime.context.pluginRoot, 'miniapp', 'node', 'export-runner.py');
   await writeFile(runnerPath, await readFile(source, 'utf8'), 'utf8');
-  return { runnerPath, statusPath: join(dir, 'export-status.json') };
+  return {
+    runnerPath,
+    statusPath: join(dir, 'export-status.json'),
+    pluginRoot: runtime.context.pluginRoot,
+    // 导出工具与常驻浏览器的落脚点。放在系统临时目录下，
+    // 里面是 clone 出来的工具、依赖和浏览器 profile——不该进数据目录。
+    workDir: join(tmpdir(), 'qq-space-export-work'),
+  };
 }
 
 async function startExport(runtime, body) {
@@ -450,11 +536,24 @@ async function startExport(runtime, body) {
   }
   const ownerUin = String(body.ownerUin ?? '').trim();
   const rawDir = join(store.dataDir, 'raw');
-  const { runnerPath, statusPath } = await prepareExportRunner(runtime);
+
+  // 后台抓取进程可能还在跑（Agent 那轮已经结束，但 worker 仍在后台抓）。
+  // 这时再点一次「开始导出」会起第二个抓取进程，两个进程抢同一个浏览器。
+  const prev = await readExportSession(store.dataDir);
+  if (prev && prev.state === 'exporting' && isPidAlive(prev.exportPid)) {
+    return {
+      ok: false,
+      message: `后台抓取还在运行（PID ${prev.exportPid}），不要重复启动。等它跑完或先关掉那个浏览器窗口。`,
+    };
+  }
+
+  const { runnerPath, statusPath, pluginRoot, workDir } = await prepareExportRunner(runtime);
   const instruction = EXPORT_INSTRUCTION
     .replaceAll('<RAW_DIR>', rawDir)
     .replaceAll('<RUNNER_PATH>', runnerPath)
-    .replaceAll('<STATUS_PATH>', statusPath);
+    .replaceAll('<STATUS_PATH>', statusPath)
+    .replaceAll('<PLUGIN_ROOT>', pluginRoot)
+    .replaceAll('<WORK_DIR>', workDir);
 
   const controller = new AbortController();
   runtime.exportController = controller;
@@ -462,7 +561,7 @@ async function startExport(runtime, body) {
   runtime.pendingPermission = null;
   await store.saveState({
     phase: PHASE.EXPORTING,
-    message: '正在准备导出，请留意弹出的 QQ 空间登录窗口',
+    message: '正在准备导出：会弹出一个 QQ 空间浏览器窗口，全程只需要扫码登录一次',
     lastError: '',
     ownerUin: ownerUin || store.state.ownerUin,
   });
@@ -529,7 +628,10 @@ async function startExport(runtime, body) {
 async function stopExport(runtime) {
   runtime.exportController?.abort();
   runtime.exportController = null;
-  await runtime.store.saveState({ phase: PHASE.IDLE, message: '已请求停止导出' });
+  await runtime.store.saveState({
+    phase: PHASE.IDLE,
+    message: '已请求停止导出（后台抓取若已启动会继续跑完；浏览器保持打开，登录态还在）',
+  });
   return { ok: true };
 }
 

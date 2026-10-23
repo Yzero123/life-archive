@@ -374,6 +374,34 @@ console.log('\n== 5. 页面提示（miniapp/client/index.html）==\n');
     const block = html.slice(html.indexOf('.session {'), html.indexOf('.session[data-state=\'off\'] .session-dot'));
     assert.ok(!/#[0-9a-fA-F]{3,8}/.test(block), '会话块里出现了硬编码色值');
   });
+
+  check('「构建知识库」按钮在「导出与建库」面板里，不在页头', () => {
+    const headerEnd = html.indexOf('</header>');
+    const header = html.slice(0, headerEnd);
+    assert.ok(!header.includes('id="btn-build"'), '按钮还在页头里，用户容易看不见');
+    const panelStart = html.indexOf('id="setup-title"');
+    const panel = html.slice(panelStart);
+    assert.ok(panel.includes('id="btn-build"'), '面板里没有「构建知识库」按钮');
+    assert.ok(panel.indexOf('id="btn-export"') < panel.indexOf('id="btn-build"'),
+      '「构建知识库」应该排在「开始导出」后面');
+  });
+
+  check('顶部状态栏按 kbReady 派生（phase 回到 idle 也要显示「知识库就绪」）', () => {
+    assert.ok(/kbReady/.test(html), '页面没有用 kbReady');
+    assert.ok(/displayPhase/.test(html), '没有派生显示用的阶段');
+    assert.ok(/setStep\('ready',\s*state\.kbReady\s*\?\s*'done'\s*:\s*'idle'\)/.test(html),
+      '第 3 步没有按 kbReady 判断');
+  });
+
+  check('页面提示知识库数据是否过期（kbStale）', () => {
+    assert.ok(/kbStale/.test(html));
+    assert.ok(html.includes('id="stale-note"'), '没有过期提示的占位');
+    assert.ok(/重新构建知识库/.test(html), '没有告诉用户怎么刷新');
+  });
+
+  check('「构建知识库」按钮在没有原始数据时不可点', () => {
+    assert.ok(/state\.hasMessages\s*\|\|\s*state\.hasArchive/.test(html));
+  });
 }
 
 console.log('\n== 6. 真实浏览器会话（需要系统 Chrome + playwright）==\n');

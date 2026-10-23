@@ -4,7 +4,7 @@
 // 运行：node tests/test.mjs
 
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, writeFile, mkdir } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile, mkdir, readFile, utimes } from 'node:fs/promises';
 import { createServer as createNetServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -690,6 +690,44 @@ try {
     assert.equal(state1.phase, 'ready');
     assert.equal(state1.persona, '说话简短直接。');
   });
+
+  check('状态里带 kbReady（顶部状态栏按它判断能不能聊）', () => {
+    assert.equal(state1.kbReady, true);
+    assert.equal(state0.kbReady, false, '建库前不该说知识库已就绪');
+  });
+
+  check('刚建完库不算过期', () => {
+    assert.equal(state1.kbStale, false);
+  });
+
+  // 导出流程结束后 phase 会被置回 idle，但知识库还在、能对话。
+  // 顶部状态栏不能因此显示「待开始」——这正是用户看到的那个问题。
+  {
+    const stateFile = join(dataDir, 'state.json');
+    const saved = JSON.parse(await readFile(stateFile, 'utf8'));
+    await writeFile(stateFile, JSON.stringify({ ...saved, phase: 'idle', message: '导出流程已结束' }), 'utf8');
+    const state2 = await call('/api/state');
+    check('phase 回到 idle 时 kbReady 仍为 true（状态栏据此显示「知识库就绪」）', () => {
+      assert.equal(state2.phase, 'idle');
+      assert.equal(state2.kbReady, true);
+    });
+    await writeFile(stateFile, JSON.stringify({ ...saved, phase: 'ready', message: '知识库已就绪' }), 'utf8');
+  }
+
+  // 导出新数据但没重建 → 知识库是旧的，页面必须说清楚
+  {
+    const rawFile = join(dataDir, 'raw', 'qzoneexport_messages.json');
+    const future = new Date(Date.now() + 60000);
+    await writeFile(rawFile, await readFile(rawFile, 'utf8'), 'utf8');
+    await utimes(rawFile, future, future);
+    const state3 = await call('/api/state');
+    check('raw 比 kb 新时标记 kbStale（提示用户重建）', () => {
+      assert.equal(state3.kbStale, true);
+      assert.equal(state3.kbReady, true);
+    });
+    const now = new Date();
+    await utimes(rawFile, now, now);
+  }
 
   // 命中 → 走 Agent 生成
   const hitStarted = await call('/api/chat', { method: 'POST', body: JSON.stringify({ message: '2015 年我在静安寺干嘛' }) });

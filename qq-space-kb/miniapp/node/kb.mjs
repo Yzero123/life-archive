@@ -38,9 +38,49 @@ export const WX_ID_PREFIX = 'wx-';
 export const WX_SOURCE = 'wechat-sns';
 export const WX_KIND = 'moments';
 
+/** 2.1：我在别人（或我自己）朋友圈下留的言。 */
+export const WX_COMMENT_KIND = 'moments_comment';
+/** 2.1：我给别人朋友圈点的赞（只有事实，没有我的原话）。 */
+export const WX_LIKE_KIND = 'moments_like';
+
 /** 这条记录是不是朋友圈来的。 */
 export function isWxRecord(record) {
   return String(record?.id ?? '').startsWith(WX_ID_PREFIX);
+}
+
+/** 是不是「我的留言」记录。 */
+export function isWxCommentRecord(record) {
+  return String(record?.kind ?? '') === WX_COMMENT_KIND;
+}
+
+/** 是不是「我的点赞」记录。 */
+export function isWxLikeRecord(record) {
+  return String(record?.kind ?? '') === WX_LIKE_KIND;
+}
+
+/**
+ * 这条记录里**属于我说的话**的部分。
+ *
+ * 留言记录的正文里混着好友的原文（只作上下文），拿全文去接地比对，
+ * bot 就能把「别人的话」当成「我说过的话」。所以留言只认 `user_voice`。
+ * 点赞是事实、没有我的原话，不算「我说了多少字」，这里是空的。
+ */
+export function userVoiceOf(record) {
+  if (isWxLikeRecord(record)) return '';
+  if (isWxCommentRecord(record)) return String(record?.user_voice ?? '').trim();
+  return String(record?.content ?? '').trim();
+}
+
+/**
+ * 接地比对时用哪段文字。
+ *
+ * 与 `userVoiceOf` 的区别：点赞记录在这里**保留**——
+ * 「我给某某点了赞」是「我做过什么」的事实，模型该知道；
+ * 但它不构成「我说的话」，所以表达习惯统计里不算。
+ */
+export function groundingVoiceOf(record) {
+  if (isWxCommentRecord(record)) return String(record?.user_voice ?? '').trim();
+  return String(record?.content ?? '').trim();
 }
 
 const TAG_RE = /<[^>]+>/g;
@@ -634,7 +674,11 @@ export function renderChunk(record, { maxComments = 3, maxCommentLen = 40, maxCh
     const lines = [renderTimeLine(record)];
     // 朋友圈记录要标出来源：模型得知道这条是发在朋友圈的，不是 QQ 空间。
     // 纯 QQ 空间数据不受影响（这一行只在有朋友圈记录时出现）。
-    if (isWxRecord(record)) lines.push('[来源] 微信朋友圈');
+    // 2.1：留言与点赞是另外两种来源，要分开标——
+    // 模型看到「微信朋友圈」会当成我发的朋友圈，看到「留言」才知道这是我回复别人。
+    if (isWxCommentRecord(record)) lines.push('[来源] 微信朋友圈·我的留言');
+    else if (isWxLikeRecord(record)) lines.push('[来源] 微信朋友圈·我的点赞');
+    else if (isWxRecord(record)) lines.push('[来源] 微信朋友圈');
     if (record.recovered) lines.push('[来源] 已删除后从互动残留恢复');
     if (record.location) lines.push(`[位置] ${record.location}`);
     const likeCount = Number(record.like_count ?? 0);
@@ -751,8 +795,10 @@ const WX_CARD_LABEL = {
 };
 
 function avgContentLength(records) {
+  // 2.1：用「我说的那部分」算长度。留言记录不能算上好友的原文，
+  // 点赞记录没有原话，天然被长度过滤掉。
   const lengths = records
-    .map((r) => String(r.content ?? '').trim())
+    .map((r) => userVoiceOf(r))
     .filter((t) => t.length)
     .map((t) => t.length);
   if (!lengths.length) return 0;
@@ -780,16 +826,22 @@ export function buildWxDimensions(wxRecords = [], qqRecords = []) {
   const lines = [];
   if (!wxRecords.length) return lines;
 
-  const times = wxRecords.map((r) => r.published_at).filter((t) => t > 0).sort((a, b) => a - b);
+  // 2.1：朋友圈这边有三类东西，**发圈类维度只算「本人发的」**。
+  // 把留言和点赞混进去，「2026 年 795 条」这种数字就完全失真了。
+  const wxOwn = wxRecords.filter((r) => !isWxCommentRecord(r) && !isWxLikeRecord(r));
+  const wxComments = wxRecords.filter(isWxCommentRecord);
+  const wxLikes = wxRecords.filter(isWxLikeRecord);
+
+  const times = wxOwn.map((r) => r.published_at).filter((t) => t > 0).sort((a, b) => a - b);
   const from = times.length ? formatTimestamp(times[0], false) : '未知';
   const to = times.length ? formatTimestamp(times[times.length - 1], false) : '未知';
-  lines.push(`[朋友圈] 共 ${wxRecords.length} 条，跨度 ${from} → ${to}`);
+  lines.push(`[朋友圈] 共 ${wxOwn.length} 条，跨度 ${from} → ${to}`);
 
   // 发圈节奏：逐年条数 + 平均频率
   const yearCount = new Map();
   const monthCount = new Map();
   const hourCount = new Map();
-  for (const record of wxRecords) {
+  for (const record of wxOwn) {
     if (!record.published_at) continue;
     const y = yearKey(record.published_at);
     yearCount.set(y, (yearCount.get(y) ?? 0) + 1);
@@ -802,7 +854,7 @@ export function buildWxDimensions(wxRecords = [], qqRecords = []) {
   }
   const yearEntries = [...yearCount.entries()].sort();
   if (yearEntries.length) {
-    const perYear = (wxRecords.length / yearEntries.length).toFixed(1);
+    const perYear = (wxOwn.length / yearEntries.length).toFixed(1);
     lines.push(
       `[朋友圈·发圈节奏] ${yearEntries.map(([y, n]) => `${y} 年 ${n} 条`).join('、')}；平均每年 ${perYear} 条`,
     );
@@ -819,7 +871,7 @@ export function buildWxDimensions(wxRecords = [], qqRecords = []) {
 
   // 常出现的位置
   const locationCount = new Map();
-  for (const record of wxRecords) {
+  for (const record of wxOwn) {
     if (record.location) locationCount.set(record.location, (locationCount.get(record.location) ?? 0) + 1);
   }
   const topLocations = [...locationCount.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5);
@@ -828,20 +880,20 @@ export function buildWxDimensions(wxRecords = [], qqRecords = []) {
   }
 
   // 媒体偏好：配图率、带视频率、每条平均几张
-  const withImage = wxRecords.filter((r) => (r.images ?? []).length).length;
-  const withVideo = wxRecords.filter((r) => (r.videos ?? []).length).length;
-  const imageTotal = wxRecords.reduce((sum, r) => sum + (r.images ?? []).length, 0);
+  const withImage = wxOwn.filter((r) => (r.images ?? []).length).length;
+  const withVideo = wxOwn.filter((r) => (r.videos ?? []).length).length;
+  const imageTotal = wxOwn.reduce((sum, r) => sum + (r.images ?? []).length, 0);
   if (withImage || withVideo) {
     const parts = [];
-    if (withImage) parts.push(`${Math.round((withImage / wxRecords.length) * 100)}% 配了图`);
-    if (withVideo) parts.push(`${Math.round((withVideo / wxRecords.length) * 100)}% 带视频`);
+    if (withImage) parts.push(`${Math.round((withImage / wxOwn.length) * 100)}% 配了图`);
+    if (withVideo) parts.push(`${Math.round((withVideo / wxOwn.length) * 100)}% 带视频`);
     const extra = withImage ? `，平均每条 ${(imageTotal / withImage).toFixed(1)} 张图` : '';
     lines.push(`[朋友圈·媒体偏好] ${parts.join('、')}${extra}`);
   }
 
   // 内容类型分布
   const kindCount = new Map();
-  for (const record of wxRecords) {
+  for (const record of wxOwn) {
     const cardKind = record.raw?.card_kind ?? '';
     let label = WX_CARD_LABEL[cardKind] ?? '';
     if (!label) {
@@ -860,7 +912,7 @@ export function buildWxDimensions(wxRecords = [], qqRecords = []) {
 
   // 互动最多的人（赞 + 评论都算）
   const personCount = new Map();
-  for (const record of wxRecords) {
+  for (const record of wxOwn) {
     for (const comment of record.comments ?? []) {
       if (comment.nick) personCount.set(comment.nick, (personCount.get(comment.nick) ?? 0) + 1);
     }
@@ -875,12 +927,71 @@ export function buildWxDimensions(wxRecords = [], qqRecords = []) {
 
   // 两个平台的表达差——只有双源才看得到的结论
   if (qqRecords.length) {
-    const wxLen = avgContentLength(wxRecords);
+    const wxLen = avgContentLength(wxOwn);
     const qqLen = avgContentLength(qqRecords);
     lines.push(
-      `[两个平台的表达差] 朋友圈平均 ${wxLen} 字、${imageRatio(wxRecords)}% 配图；`
+      `[两个平台的表达差] 朋友圈平均 ${wxLen} 字、${imageRatio(wxOwn)}% 配图；`
       + `QQ 空间平均 ${qqLen} 字、${imageRatio(qqRecords)}% 配图`,
     );
+  }
+
+  // ---------------------------------------------------------------------
+  // 2.1：我的互动。这些是「我做过什么」，不是「我发的动态」。
+  // ---------------------------------------------------------------------
+  if (wxComments.length || wxLikes.length) {
+    const parts = [];
+    if (wxComments.length) parts.push(`留言 ${wxComments.length} 条`);
+    if (wxLikes.length) parts.push(`点赞 ${wxLikes.length} 次`);
+    lines.push(`[朋友圈·我的互动] ${parts.join('、')}`);
+  }
+
+  // 最常回复谁
+  const replyToCount = new Map();
+  for (const record of wxComments) {
+    // 只算「回复别人」——我回复**自己**朋友圈下的人，不算「回复某人」。
+    // 不排除的话，这一栏第一名永远是我自己（实测 848 次里全是自己）。
+    if (record.raw?.reply_on_own_post) continue;
+    const who = record.raw?.reply_to_name || record.raw?.reply_to || '';
+    if (who) replyToCount.set(who, (replyToCount.get(who) ?? 0) + 1);
+  }
+  const topReplyTo = [...replyToCount.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5);
+  if (topReplyTo.length) {
+    lines.push(
+      `[朋友圈·最常回复的人] ${topReplyTo.map(([name, count]) => `${name}(${count}次)`).join('、')}`,
+    );
+  }
+
+  // 留言风格：只有留言本身，不含被回复的原文
+  if (wxComments.length) {
+    const voices = wxComments.map((r) => userVoiceOf(r)).filter(Boolean);
+    const avg = voices.length
+      ? Math.round(voices.reduce((sum, t) => sum + t.length, 0) / voices.length)
+      : 0;
+    const kw = extractKeywords(voices, 8).keywords;
+    const hourCount = new Map();
+    for (const record of wxComments) {
+      if (!record.published_at) continue;
+      const hour = new Date(record.published_at * 1000).getHours();
+      const bucket = hour < 6 ? '凌晨' : hour < 12 ? '上午' : hour < 14 ? '中午'
+        : hour < 18 ? '下午' : hour < 23 ? '晚上' : '深夜';
+      hourCount.set(bucket, (hourCount.get(bucket) ?? 0) + 1);
+    }
+    const peakHour = [...hourCount.entries()].sort((a, b) => b[1] - a[1])[0];
+    const bits = [`平均每条 ${avg} 字`];
+    if (kw.length) bits.push(`常说：${kw.join('、')}`);
+    if (peakHour) bits.push(`最常在${peakHour[0]}留言`);
+    lines.push(`[朋友圈·留言风格] ${bits.join('；')}`);
+  }
+
+  // 收到的反馈：别人在我的动态下的反应
+  if (wxOwn.length) {
+    const gotLikes = wxOwn.reduce((sum, r) => sum + Number(r.like_count ?? 0), 0);
+    const gotComments = wxOwn.reduce((sum, r) => sum + Number(r.comment_count ?? 0), 0);
+    if (gotLikes || gotComments) {
+      lines.push(
+        `[朋友圈·收到的反馈] 你的 ${wxOwn.length} 条动态共收到 ${gotLikes} 个赞、${gotComments} 条评论`,
+      );
+    }
   }
 
   return lines;
@@ -898,7 +1009,10 @@ export function buildProfile(records, summaries = []) {
   // 踩过的坑：早先只统计「有正文」的记录，于是画像写着「共 40 条说说」「已删除后恢复 1 条」，
   // 而页面上明明显示 85 条、恢复 44 条。模型拿着这份画像说话，自然会跟页面打架。
   const all = records.filter((r) => r.kind !== 'guestbook');
-  const posts = all.filter((r) => (r.content ?? '').trim());
+  // 2.1：**点赞是事实，不是「我说的」**。它进总条数与时间跨度，
+  // 但不参与表达习惯、话题、代表原文这些「我的话」的统计。
+  const spoken = all.filter((r) => !isWxLikeRecord(r));
+  const posts = spoken.filter((r) => userVoiceOf(r).trim());
   const traces = all.filter((r) => !(r.content ?? '').trim());
   if (!all.length) return null;
 
@@ -906,6 +1020,10 @@ export function buildProfile(records, summaries = []) {
   const from = timestamps.length ? formatTimestamp(timestamps[0], false) : '未知';
   const to = timestamps.length ? formatTimestamp(timestamps[timestamps.length - 1], false) : '未知';
 
+  // 年份分布按**全部记录**算——包括点赞。
+  // 口径必须和 [跨度] 的总条数、和 kb_stats 的年份分布对得上：
+  // 三个地方都叫「条数」，数字却不一样的话，模型和看板会互相打架。
+  // 点赞是「我做过的事」，它确实发生在某一年里。
   const yearCount = new Map();
   for (const record of all) {
     const year = record.published_at ? yearKey(record.published_at) : '时间未知';
@@ -928,9 +1046,9 @@ export function buildProfile(records, summaries = []) {
   }
   const topPeople = [...personCount.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8);
 
-  const { keywords } = extractKeywords(posts.map((r) => r.content ?? ''));
+  const { keywords } = extractKeywords(posts.map((r) => userVoiceOf(r)));
 
-  const lengths = posts.map((r) => (r.content ?? '').length).sort((a, b) => a - b);
+  const lengths = posts.map((r) => userVoiceOf(r).length).sort((a, b) => a - b);
   const average = lengths.length ? Math.round(lengths.reduce((a, b) => a + b, 0) / lengths.length) : 0;
   const likeTotal = all.reduce((sum, r) => sum + Number(r.like_count ?? 0), 0);
   const commentTotal = all.reduce(
@@ -953,8 +1071,17 @@ export function buildProfile(records, summaries = []) {
   // 条数要说清楚「有正文多少」和「只有痕迹多少」，别只报一个有正文的口径。
   const traceNote = traces.length ? `，另有 ${traces.length} 条已删除、正文未恢复` : '';
   if (hasWx) {
+    // 2.1：朋友圈这边有三种东西，口径必须拆开说——
+    // 「本人发的」「我在别人朋友圈下的留言」「我点的赞」性质完全不同，
+    // 混成一句「微信朋友圈 N 条」，模型会以为 N 全是我发的动态。
+    const wxOwn = wxRecords.filter((r) => !isWxCommentRecord(r) && !isWxLikeRecord(r)).length;
+    const wxComments = wxRecords.filter(isWxCommentRecord).length;
+    const wxLikes = wxRecords.filter(isWxLikeRecord).length;
+    const wxNote = wxComments || wxLikes
+      ? `微信朋友圈 ${wxRecords.length} 条（本人发的 ${wxOwn} 条、我的留言 ${wxComments} 条、我的点赞 ${wxLikes} 条）`
+      : `微信朋友圈 ${wxRecords.length} 条`;
     lines.push(
-      `[跨度] ${from} → ${to}，共 ${all.length} 条动态（QQ 空间 ${qqRecords.length} 条，微信朋友圈 ${wxRecords.length} 条；其中有正文 ${posts.length} 条${traceNote}）`,
+      `[跨度] ${from} → ${to}，共 ${all.length} 条动态（QQ 空间 ${qqRecords.length} 条，${wxNote}；其中有正文 ${posts.length} 条${traceNote}）`,
     );
   } else {
     lines.push(`[跨度] ${from} → ${to}，共 ${all.length} 条说说（有正文 ${posts.length} 条${traceNote}）`);
@@ -977,7 +1104,7 @@ export function buildProfile(records, summaries = []) {
   // 2.0：朋友圈专属维度。纯 QQ 空间数据时这里是空数组，输出与 1.0 逐字节一致。
   lines.push(...buildWxDimensions(wxRecords, qqRecords));
   if (topPost) {
-    lines.push(`[最受欢迎的一条] ${truncate(topPost.content, 40)}（${topPost.like_count} 赞）`);
+    lines.push(`[最受欢迎的一条] ${truncate(userVoiceOf(topPost), 40)}（${topPost.like_count} 赞）`);
   }
   // 代表性原文：画像里必须带真话。
   // 一是模型得照着本人原话说话才像本人，二是接地校验靠的是措辞重合——
@@ -987,7 +1114,7 @@ export function buildProfile(records, summaries = []) {
   const seenSample = new Set();
   const step = Math.max(1, Math.floor(posts.length / 8));
   for (let i = 0; i < posts.length && samples.length < 8; i += step) {
-    const text = (posts[i].content ?? '').trim();
+    const text = userVoiceOf(posts[i]);
     if (!text || text.length < 4) continue;
     const key = text.slice(0, 12);
     if (seenSample.has(key)) continue;
@@ -1012,7 +1139,7 @@ export function buildProfile(records, summaries = []) {
       (b, r) => (Number(r.like_count ?? 0) > Number(b.like_count ?? 0) ? r : b),
       list[0],
     );
-    const text = (best.content ?? '').trim();
+    const text = userVoiceOf(best);
     if (text.length >= 4) yearSamples.push(`${y} 年：「${truncate(text, 26)}」`);
   }
   if (yearSamples.length) {
@@ -1061,6 +1188,9 @@ export function buildYearSummaries(records) {
   const undated = [];
   for (const record of records) {
     if (record.kind === 'guestbook') continue;
+    // 2.1：点赞是事实（「我给谁点过赞」），它**算这一年的条数**——
+    // 跟画像的 [年份分布]、跟 kb_stats 的年份分布是同一个口径。
+    // 但它没有「我说的」内容，所以不进关键词与代表性内容（下面用 userVoiceOf 取）。
     if (!record.published_at) {
       undated.push(record);
       continue;
@@ -1073,7 +1203,10 @@ export function buildYearSummaries(records) {
 
   const summaries = [];
   for (const [key, group] of [...groups.entries()].sort()) {
-    const texts = group.map((r) => r.content ?? '');
+    // 2.1：关键词与代表性内容都用**我说的那部分**。
+    // 留言记录的正文混着好友的原文，拿全文提词会抽出别人的词；
+    // 点赞记录压根没有「我说的」，直接排除。
+    const texts = group.map((r) => userVoiceOf(r)).filter(Boolean);
     const { keywords, confident } = extractKeywords(texts);
     const locationCount = new Map();
     const personCount = new Map();
@@ -1096,14 +1229,25 @@ export function buildYearSummaries(records) {
     }
     const topLocations = [...locationCount.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5);
     const topPeople = [...personCount.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5);
-    const groupWx = group.filter(isWxRecord).length;
+    const groupWxOwn = group.filter((r) => isWxRecord(r) && !isWxCommentRecord(r) && !isWxLikeRecord(r)).length;
+    const groupWxComments = group.filter(isWxCommentRecord).length;
+    const groupWxLikes = group.filter(isWxLikeRecord).length;
+    const groupWx = groupWxOwn + groupWxComments + groupWxLikes;
     const groupQq = group.length - groupWx;
     // 2.0：这一组里混了朋友圈时说「动态」并拆来源；纯 QQ 空间时保持 1.0 原话。
     const title = key === '时间未知'
       ? (groupWx ? '发布时间未知的一组动态' : '发布时间未知的一组说说')
       : `${key} 年`;
+    // 2.1：朋友圈这边还要再拆一层——本人发的 vs 我的留言 vs 我的点赞。
+    // 混成一句「微信朋友圈 N 条」，模型会以为 N 全是我发的动态。
+    const wxParts = [`本人发的 ${groupWxOwn} 条`];
+    if (groupWxComments) wxParts.push(`我的留言 ${groupWxComments} 条`);
+    if (groupWxLikes) wxParts.push(`我的点赞 ${groupWxLikes} 条`);
+    const wxNote = groupWxComments || groupWxLikes
+      ? `微信朋友圈 ${groupWx} 条（${wxParts.join('、')}）`
+      : `微信朋友圈 ${groupWx} 条`;
     const countText = groupWx
-      ? `共留下 ${group.length} 条动态（QQ 空间 ${groupQq} 条，微信朋友圈 ${groupWx} 条）`
+      ? `共留下 ${group.length} 条动态（QQ 空间 ${groupQq} 条，${wxNote}）`
       : `共留下 ${group.length} 条说说`;
 
     const interactionParts = [];
@@ -1182,7 +1326,10 @@ export function buildGroundingText(records, summaries = [], profileText = '') {
   for (const record of records) {
     if (record.kind === 'guestbook') continue;
     const date = record.published_at ? formatTimestamp(record.published_at, false) : '时间未知';
-    const body = (record.content ?? '').trim() || '（已删除，正文未恢复）';
+    // 2.1：留言记录只拿**我的原话**去接地比对。
+    // 正文里混着好友的原文（只作上下文），拿全文比对，bot 就能把
+    // 别人的话当成「我说过的话」——这是最容易出事的地方。
+    const body = groundingVoiceOf(record) || '（已删除，正文未恢复）';
     const bits = [date, body];
     if (record.location) bits.push(String(record.location));
     if (record.like_count) bits.push(`${record.like_count} 个赞`);

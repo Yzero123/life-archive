@@ -25,10 +25,12 @@ import {
   buildIndex,
   buildKbDigest,
   buildProfile,
+  buildWxDimensions,
   buildYearSummaries,
   isWxRecord,
   mergeRecords,
   search,
+  userVoiceOf,
   WX_ID_PREFIX,
 } from '../miniapp/node/kb.mjs';
 
@@ -699,7 +701,9 @@ try {
 
   await checkAsync('导入后原始数据落在 raw/wechat_sns.json', async () => {
     const raw = JSON.parse(await readFile(join(dataDir, 'raw', 'wechat_sns.json'), 'utf8'));
-    assert.equal(raw.posts.length, 5);
+    // 2.1：落盘只留「我需要的部分」——本人的动态 + 我互动过的。
+    // 好友那条（author 不是我、又跟我没关系）不留。
+    assert.equal(raw.posts.length, 4);
   });
 
   const build1 = await call('/api/kb/build', { method: 'POST', body: JSON.stringify({}) });
@@ -854,6 +858,8 @@ await importStore.init();
 const importRes = await importWx({ store: importStore }, {}, { roots: scanRoots });
 check('多候选时导入的是「本人发的那份」，不是目录里第一份', () => {
   assert.equal(importRes.ok, true);
+  // 2.1：目录里的多份会**合并**读进来（好友那几份里可能有「我的留言」），
+  // 但「我发的」条数仍然只算本人那几份——好友的动态不会顶替成本人的。
   assert.equal(importRes.count, 3);
   assert.equal(importRes.owner, WX_OWNER);
 });
@@ -931,12 +937,13 @@ check('第二次导入：条数是累加的，不是被覆盖成 2 条', () => {
 await checkAsync('落盘的 raw 保留了两批的并集', async () => {
   const raw = JSON.parse(await readFile(join(mergeDir, 'raw', 'wechat_sns.json'), 'utf8'));
   const ids = raw.posts.map((p) => String(p.id));
-  assert.equal(raw.posts.length, 6, '第一批 5 条 + 第二批新来的 1 条');
+  // 第一批本人 4 条 + 第二批新来的 1 条；第一批里那条好友动态不留。
+  assert.equal(raw.posts.length, 5, '本人 4 条 + 第二批新来的 1 条');
   assert.ok(ids.includes('1000'), '更早的那条必须还在');
   assert.ok(ids.includes('1001'));
   assert.ok(ids.includes('1002'));
   assert.ok(ids.includes('1003'));
-  assert.equal(raw.postCount, 6);
+  assert.equal(raw.postCount, 5);
 });
 
 await checkAsync('同一条动态取后来的那份（点赞数会变）', async () => {
@@ -973,6 +980,176 @@ check('mergeWechatSnsPayload：结果按时间倒序', () => {
 });
 
 await rm(mergeDir, { recursive: true, force: true });
+
+// ---------------------------------------------------------------------------
+// [7] 2.1：朋友圈互动（我的留言 / 我的点赞）
+//
+// 铁律：**只有我说的才算我的**。好友的正文只作上下文，
+// 接地校验和表达习惯统计都不能把它算进来。
+// ---------------------------------------------------------------------------
+
+console.log('\n[7] 朋友圈互动：留言与点赞');
+
+const WX_INTERACT = {
+  meta: { account: WX_OWNER, count: 3, format: 'json', source: 'test' },
+  posts: [
+    {
+      // 好友发的，我留了言
+      id: '3001',
+      time: ts('2020-03-01T12:00:00Z'),
+      author: WX_FRIEND,
+      authorName: '演示好友',
+      text: '好友发的原文，内容很长很长很长很长很长很长很长',
+      kind: 1,
+      media: [],
+      likes: [],
+      comments: [],
+      myLike: false,
+      myComments: [{ name: '演示本人', username: WX_OWNER, text: '我留下的言', time: ts('2020-03-01T12:30:00Z') }],
+    },
+    {
+      // 好友发的，我只点了赞
+      id: '3002',
+      time: ts('2020-04-01T12:00:00Z'),
+      author: WX_FRIEND,
+      authorName: '演示好友',
+      text: '好友发的另一条',
+      kind: 1,
+      media: [],
+      likes: [],
+      comments: [],
+      myLike: true,
+      myLikeTime: ts('2020-04-01T13:00:00Z'),
+      myComments: [],
+    },
+    {
+      // 好友发的，我既没留言也没点赞
+      id: '3003',
+      time: ts('2020-05-01T12:00:00Z'),
+      author: WX_FRIEND,
+      authorName: '演示好友',
+      text: '跟我没关系的一条',
+      kind: 1,
+      media: [],
+      likes: [],
+      comments: [],
+      myLike: false,
+      myComments: [],
+    },
+  ],
+};
+
+const inter = parseWechatSns(WX_INTERACT, { ownerWxid: WX_OWNER, includeInteractions: true });
+const interComments = inter.records.filter((r) => r.kind === 'moments_comment');
+const interLikes = inter.records.filter((r) => r.kind === 'moments_like');
+
+check('我的留言生成独立的记录类型', () => {
+  assert.equal(interComments.length, 1);
+  assert.equal(interComments[0].id, 'wx-c-3001-0');
+  assert.deepEqual(interComments[0].sources, ['wechat-sns-comment']);
+});
+
+check('我的留言按留言时间落库（不是动态的发布时间）', () => {
+  assert.equal(interComments[0].published_at, ts('2020-03-01T12:30:00Z'));
+});
+
+check('留言记录带上下文，但上下文单独放着', () => {
+  assert.ok(interComments[0].content.includes('原文'), '正文要留语境');
+  assert.ok(interComments[0].content.includes('我留下的言'));
+  assert.equal(interComments[0].user_voice, '我留下的言', 'user_voice 只装我说的话');
+  assert.ok(interComments[0].content.includes('好友发的原文'), '好友原文只作上下文');
+});
+
+check('我点的赞生成记录，但只有事实没有我的原话', () => {
+  assert.equal(interLikes.length, 1);
+  assert.equal(interLikes[0].id, 'wx-l-3002');
+  assert.equal(interLikes[0].user_voice, '');
+  assert.ok(interLikes[0].content.includes('点赞'));
+});
+
+check('跟我没关系的动态不入库', () => {
+  assert.equal(inter.records.filter((r) => r.id === 'wx-3003').length, 0);
+  assert.equal(inter.stats.notMine, 1);
+});
+
+check('关掉互动开关后，留言与点赞都不入库', () => {
+  const off = parseWechatSns(WX_INTERACT, { ownerWxid: WX_OWNER, includeInteractions: false });
+  assert.equal(off.records.length, 0);
+  assert.equal(off.stats.comments, 0);
+  assert.equal(off.stats.likes, 0);
+});
+
+check('接地文本只用我的原话，好友原文不进资料', () => {
+  const grounding = buildGroundingText(inter.records);
+  assert.ok(grounding.includes('我留下的言'), '我说的话要在');
+  assert.ok(!grounding.includes('好友发的原文'), '好友的原文不能进接地资料');
+});
+
+check('表达习惯只算我说的，不算好友原文', () => {
+  const voiceOnly = interComments.map((r) => userVoiceOf(r));
+  assert.deepEqual(voiceOnly, ['我留下的言']);
+  const profile = buildProfile(inter.records, []);
+  // 只有一条留言，原文 22 字；算上好友原文就完全不是这个数了
+  assert.ok(profile.facts.includes('[表达习惯] 平均每条 5 字'), profile.facts.split('\n').find((l) => l.includes('表达习惯')));
+});
+
+check('画像把三种东西分开报', () => {
+  const profile = buildProfile(
+    [...inter.records, ...parseWechatSns(WX_PAYLOAD, { ownerWxid: WX_OWNER }).records],
+    [],
+  );
+  assert.ok(profile.facts.includes('我的留言'), '要单独报留言');
+  assert.ok(profile.facts.includes('我的点赞'), '要单独报点赞');
+});
+
+check('朋友圈专属维度只算本人发的动态', () => {
+  const withOwn = parseWechatSns(WX_PAYLOAD, { ownerWxid: WX_OWNER }).records;
+  const dims = buildWxDimensions([...withOwn, ...inter.records], []);
+  const ownLine = dims.find((l) => l.startsWith('[朋友圈] 共'));
+  assert.ok(ownLine.includes(`${withOwn.length} 条`), ownLine);
+  assert.ok(!ownLine.includes('留言'), '发圈维度不能把留言算进去');
+});
+
+check('新增的互动维度都出来了', () => {
+  // 「收到的反馈」是别人**对我**的动态的反应，所以必须带上本人发的动态才看得到。
+  const withOwn = parseWechatSns(WX_PAYLOAD, { ownerWxid: WX_OWNER }).records;
+  const dims = buildWxDimensions([...withOwn, ...inter.records], []);
+  for (const tag of [
+    '[朋友圈·我的互动]',
+    '[朋友圈·最常回复的人]',
+    '[朋友圈·留言风格]',
+    '[朋友圈·收到的反馈]',
+  ]) {
+    assert.ok(dims.some((l) => l.startsWith(tag)), `${tag} 不在：${dims.join(' | ')}`);
+  }
+});
+
+check('条数口径三处一致：年份分布之和 = 总条数 = 年度摘要之和', () => {
+  const withOwn = parseWechatSns(WX_PAYLOAD, { ownerWxid: WX_OWNER }).records;
+  const all = [...withOwn, ...inter.records];
+  const profile = buildProfile(all, []);
+  // 画像的 [年份分布] 之和
+  const distLine = profile.facts.split('\n').find((l) => l.startsWith('[年份分布]'));
+  assert.ok(distLine, '画像里没有 [年份分布]');
+  const distSum = [...distLine.matchAll(/(\d+) 条/g)].reduce((s, m) => s + Number(m[1]), 0);
+  // 年度摘要的条数之和
+  const summaries = buildYearSummaries(all);
+  const summarySum = summaries.reduce((s, x) => s + x.count, 0);
+  assert.equal(summarySum, all.length, '年度摘要之和与总条数不一致');
+  assert.equal(distSum, all.length, '画像年份分布之和与总条数不一致');
+});
+
+check('年度摘要里，点赞进条数但不进代表性内容', () => {
+  const withOwn = parseWechatSns(WX_PAYLOAD, { ownerWxid: WX_OWNER }).records;
+  const all = [...withOwn, ...inter.records];
+  const summaries = buildYearSummaries(all);
+  const likeYear = interLikes[0].published_at;
+  const summary = summaries.find((s) => s.year === new Date(likeYear * 1000).getUTCFullYear().toString());
+  assert.ok(summary, '点赞那一年的年度摘要不在');
+  assert.ok(summary.count >= 1);
+  // 点赞记录的内容是「给谁点了赞」，不是「我说的」——不该出现在代表性内容里
+  assert.ok(!summary.text.includes('点了赞'), summary.text);
+});
 
 console.log('\n' + '='.repeat(56));
 console.log(`通过 ${passed} 项，失败 ${failed} 项`);

@@ -8,7 +8,7 @@
 这是一个 [Mini App](https://agent.minimax.cn/docs/miniapp/overview) 包，
 可以在 MiniMax Code（MCode）里直接安装使用。
 
-> 当前版本 **v2.0.3**。
+> 当前版本 **v2.1.0**。
 > 完整版本历史见 [`CHANGELOG.md`](CHANGELOG.md)；
 > 想回退到任意旧版，见 [版本历史与回退](#版本历史与回退)。
 
@@ -20,7 +20,7 @@
 
 **方式一：直接导入 zip**（推荐给不想折腾 git 的人）
 
-下载 [`releases/qq-space-kb-2.0.2.zip`](releases/qq-space-kb-2.0.2.zip)，
+下载 [`releases/qq-space-kb-2.1.0.zip`](releases/qq-space-kb-2.1.0.zip)，
 在 MCode 里安装 Mini App 时选择这个包。
 
 > 想要旧版？[Releases 页面](https://github.com/Yzero123/qq-space-kb/releases)有全部历史版本的 zip。
@@ -76,6 +76,7 @@ git clone https://github.com/Yzero123/qq-space-kb.git
 | ⑤ 直接在对话里用 | MCP 工具 + 技能 + 人设子代理，不开页面也能问知识库 | 同样的事实红线，代码兜底 |
 | ⑥ 看分布 | 年份分布看板：KPI 四卡 + 逐年构成堆叠柱图 + 紧凑明细表 | 数据密集期与回溯集中期一眼可见 |
 | ⑦ 朋友圈（2.0 起，**可选**） | 导入你自己发的微信朋友圈历史动态 | 同一个知识库多一个来源；画像多出朋友圈专属维度，并给出「两个平台的表达差」 |
+| ⑦′ 朋友圈互动（2.1 起，**可选**） | 连**你在别人朋友圈下留的言**、**你点过的赞**一起导入 | 画像多出「我最常回复谁」「我的留言风格」「我收到的反馈」；好友原文只作上下文，不算进「我说的话」 |
 
 几个设计上花了力气的地方：
 
@@ -120,6 +121,11 @@ git clone https://github.com/Yzero123/qq-space-kb.git
 细节和踩过的坑见 [`qq-space-kb/README.md`](qq-space-kb/README.md)（包内文档）
 和 [`QQ空间说说知识库方案.md`](QQ空间说说知识库方案.md)（方案与工程复盘）。
 
+> **2.1 已发布**：朋友圈互动也纳进来了——**你在别人朋友圈下留的言、你点过的赞**，
+> 同样是「过去的你」。好友的原文只作上下文，**永远不算成「我说的话」**。
+> 取法见《微信朋友圈取数操作指引》§4.4（互动数据要用插件自带的 `wx-export-runner.py --scope all` 导，
+> 工具自己的导出会把点赞丢掉）。
+>
 > **2.0 已发布**：接上了微信朋友圈历史，两个来源合成一份画像。
 > 朋友圈数据源**默认关**，关着的时候 1.0 的行为一个字都不变——
 > 这条不是靠人说了算，是靠**逐字节黄金基线**锁死的
@@ -149,6 +155,11 @@ git clone https://github.com/Yzero123/qq-space-kb.git
 
 | 版本 | 日期 | 一句话 | 安装包 |
 |---|---|---|---|
+| v2.1.0 | 2026-10-23 | 朋友圈互动扩展：我的留言与我的点赞也进库，好友原文只作上下文 | [zip](releases/qq-space-kb-2.1.0.zip) |
+| v2.0.7 | 2026-10-23 | 导入改「合并」：滑动的缓存窗口能一点一点攒成全量 | [zip](releases/qq-space-kb-2.0.7.zip) |
+| v2.0.6 | 2026-10-23 | 查清朋友圈条数上限：34 条是本地窗口内的全部 | [zip](releases/qq-space-kb-2.0.6.zip) |
+| v2.0.5 | 2026-10-23 | 修正条数口径（5 → 34），补「条数对不上就重导」 | [zip](releases/qq-space-kb-2.0.5.zip) |
+| v2.0.4 | 2026-10-23 | 隐私回扫误报修复：退化值不再当指纹 | [zip](releases/qq-space-kb-2.0.4.zip) |
 | v2.0.3 | 2026-10-23 | 导入按钮按内容认文件，导出全部联系人时也能挑出你发的那份 | [zip](releases/qq-space-kb-2.0.3.zip) |
 | v2.0.2 | 2026-10-23 | 归一化器支持 WeChatDataAnalysis 的导出形状 | [zip](releases/qq-space-kb-2.0.2.zip) |
 | v2.0.1 | 2026-10-23 | 文档事实修正：SIP 只挡 SIWX，不挡 WeChatDataAnalysis | [zip](releases/qq-space-kb-2.0.1.zip) |

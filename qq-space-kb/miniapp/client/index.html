@@ -352,7 +352,13 @@
         <p class="hint">
           可选数据源，默认关。导入你自己发的朋友圈后，人物画像会多出朋友圈专属的维度——
           发圈节奏、常去的地方、配图习惯、互动的人——还能对比你在两个平台说话方式的差别。
-          好友发的不会进库；图片视频只存链接与描述，不下载。
+          图片视频只存链接与描述，不下载。
+        </p>
+        <p class="hint">
+          外部工具按联系人分文件导出时，<strong>整个目录一起导入</strong>即可：
+          除了你发的动态，还能拿到<strong>你在别人朋友圈下留的言</strong>和<strong>你点的赞</strong>——
+          这两部分也是你说过的话，只是发生在别人的动态下面。
+          好友的正文只作上下文留个片段，不会被当成你说的话。
         </p>
         <p class="hint">
           用外部解密工具导出朋友圈 JSON（<strong>文件名不限</strong>，按内容认），放到下面这个目录，然后点「导入」：
@@ -367,6 +373,7 @@
         <div class="row" style="margin-top: 12px">
           <button id="btn-wx-import" type="button">导入朋友圈数据</button>
           <button id="btn-wx-toggle" type="button" disabled>启用朋友圈</button>
+          <button id="btn-wx-interactions" type="button" disabled>关闭朋友圈互动</button>
           <button id="btn-wx-clear" class="danger" type="button" disabled>清空朋友圈数据</button>
           <span class="panel-note" id="wx-message"></span>
         </div>
@@ -465,6 +472,7 @@
           wxNote: document.getElementById('wx-note'),
           btnWxImport: document.getElementById('btn-wx-import'),
           btnWxToggle: document.getElementById('btn-wx-toggle'),
+          btnWxInteractions: document.getElementById('btn-wx-interactions'),
           btnWxClear: document.getElementById('btn-wx-clear'),
         };
 
@@ -547,7 +555,9 @@
           var imported = Boolean(wx.imported);
           el.btnWxToggle.disabled = !imported;
           el.btnWxClear.disabled = !imported;
+          el.btnWxInteractions.disabled = !imported;
           el.btnWxToggle.textContent = wx.enabled ? '停用朋友圈' : '启用朋友圈';
+          el.btnWxInteractions.textContent = wx.interactions === false ? '开启朋友圈互动' : '关闭朋友圈互动';
           el.wxDir.textContent = wx.targetDir || '';
 
           if (!imported) {
@@ -555,12 +565,20 @@
             el.wxNote.hidden = true;
             return;
           }
+          // 2.1：三种东西分开报，别混成一句「N 条」。
+          var parts = [wx.count + ' 条动态'];
+          if (wx.comments) parts.push(wx.comments + ' 条留言');
+          if (wx.likes) parts.push(wx.likes + ' 次点赞');
           el.wxState.textContent = wx.enabled
-            ? '已启用 · ' + wx.count + ' 条'
-            : '已导入 ' + wx.count + ' 条（未启用）';
+            ? '已启用 · ' + parts.join(' · ')
+            : '已导入 ' + parts.join(' · ') + '（未启用）';
           if (wx.enabled) {
             el.wxNote.hidden = false;
-            el.wxNote.textContent = '朋友圈已计入知识库。导入或启停后要点「重新构建知识库」才会生效。';
+            var note = '朋友圈已计入知识库。导入或启停后要点「重新构建知识库」才会生效。';
+            if (wx.interactions === false) {
+              note += '当前只计入了你发的动态，留言与点赞没有计入。';
+            }
+            el.wxNote.textContent = note;
           } else {
             el.wxNote.hidden = true;
           }
@@ -778,10 +796,27 @@
           var path = el.wxPath.value.trim();
           post('/api/wx/import', path ? { path: path } : {}).then(function (result) {
             if (result && result.ok) {
-              el.wxMessage.textContent = '已导入 ' + result.count + ' 条'
+              var parts = [result.count + ' 条动态'];
+              if (result.comments) parts.push(result.comments + ' 条留言');
+              if (result.likes) parts.push(result.likes + ' 次点赞');
+              el.wxMessage.textContent = '已导入 ' + parts.join(' · ')
                 + '（另有 ' + result.notMine + ' 条不是本人发的，已忽略）';
             } else {
               el.wxMessage.textContent = (result && result.message) || '导入失败';
+            }
+            poll();
+          });
+        });
+
+        el.btnWxInteractions.addEventListener('click', function () {
+          var on = Boolean(latestState && latestState.wx && latestState.wx.interactions !== false);
+          post('/api/wx/interactions', { enabled: !on }).then(function (result) {
+            if (result && result.ok) {
+              el.wxMessage.textContent = result.interactions
+                ? '已计入朋友圈互动，点「重新构建知识库」生效'
+                : '已排除朋友圈互动，点「重新构建知识库」生效';
+            } else {
+              el.wxMessage.textContent = (result && result.message) || '操作失败';
             }
             poll();
           });

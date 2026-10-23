@@ -61,7 +61,7 @@ Don't:
 - No external script or asset origins beyond Chart.js CDN.
 - No comments in markup and CSS; they waste tokens and slow streaming.
 - No `text-transform: uppercase` or `letter-spacing` on labels. Use sentence case as-is.
-- Never reference specific color names ("blue bar", "red line") in widget text or notes. Theme tokens resolve to different colors in light vs dark mode. Describe by meaning instead: "highlighted bar", "primary series", "accent color".
+- Never reference specific color names in widget text or notes. Theme tokens resolve to different colors in light vs dark mode. Describe by meaning instead: "highlighted bar", "primary series", "accent color".
 
 ## Interaction and state rules
 

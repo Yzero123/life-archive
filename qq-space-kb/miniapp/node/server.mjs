@@ -449,6 +449,10 @@ async function handle(request, response, runtime) {
     const body = await readBody(request);
     return json(response, await switchWx(runtime, body));
   }
+  if (request.method === 'POST' && path === '/api/wx/interactions') {
+    const body = await readBody(request);
+    return json(response, await switchWxInteractions(runtime, body));
+  }
   if (request.method === 'POST' && path === '/api/wx/clear') {
     return json(response, await clearWx(runtime));
   }
@@ -815,7 +819,9 @@ async function buildKnowledgeBase(runtime, body) {
     if (archive) records.push(...parseQzoneArchive(archive, ownerUin));
     let wxStats = null;
     if (wxRaw) {
-      const parsed = parseWechatSns(wxRaw, {});
+      // 2.1：互动（留言 / 点赞）默认纳入。raw 里没有相关标记时不会多出记录。
+      const includeInteractions = store.state.wx?.interactions !== false;
+      const parsed = parseWechatSns(wxRaw, { includeInteractions });
       records.push(...parsed.records);
       wxStats = parsed.stats;
     }
@@ -875,8 +881,16 @@ async function buildKnowledgeBase(runtime, body) {
       // 2.0：来源分布与朋友圈单独的计数。1.0 时 bySource 只有 qzone 一项。
       bySource: countBySource(merged),
       wx: wxStats
-        ? { count: wxStats.kept, total: wxStats.total, notMine: wxStats.notMine, owner: wxStats.owner }
-        : { count: 0, total: 0, notMine: 0, owner: '' },
+        ? {
+          count: wxStats.kept,
+          total: wxStats.total,
+          notMine: wxStats.notMine,
+          // 2.1：互动计数单独列，别混进「我发了多少条」。
+          comments: wxStats.comments ?? 0,
+          likes: wxStats.likes ?? 0,
+          owner: wxStats.owner,
+        }
+        : { count: 0, total: 0, notMine: 0, comments: 0, likes: 0, owner: '' },
       wxEnabled,
     };
 
@@ -1056,12 +1070,33 @@ async function wxStatus(runtime) {
     enabled: Boolean(wx.enabled),
     imported: Boolean(wx.imported && rawExists),
     count: Number(wx.count ?? 0),
+    // 2.1：互动计数——我在别人朋友圈下留的言、我点的赞。
+    comments: Number(wx.comments ?? 0),
+    likes: Number(wx.likes ?? 0),
+    interactions: wx.interactions !== false,
     owner: String(wx.owner ?? ''),
     source: String(wx.source ?? ''),
     importedAt: Number(wx.importedAt ?? 0),
     targetDir: store.rawDir,
     rawExists,
   };
+}
+
+/**
+ * 开关「朋友圈互动」。
+ *
+ * 关掉之后，**只有我发的动态**进知识库——我在别人朋友圈下的留言、
+ * 我点的赞都不入库。重建知识库才生效。
+ */
+async function switchWxInteractions(runtime, body) {
+  const { store } = runtime;
+  const wx = store.state.wx ?? {};
+  if (!wx.imported) {
+    return { ok: false, message: '还没有导入朋友圈数据，先导入再开关。' };
+  }
+  const enabled = body?.enabled !== false;
+  await store.saveState({ wx: { ...wx, interactions: enabled } });
+  return { ok: true, interactions: enabled, needRebuild: true };
 }
 
 /**
@@ -1087,7 +1122,20 @@ export async function importWx(runtime, body, options = {}) {
     const explicit = String(body?.path ?? '').trim();
     const candidates = explicit ? [explicit] : await scanWxCandidates(runtime, options);
     const forcedOwner = String(body?.owner ?? '').trim();
+    // 2.1：目录里往往有**几十份**（外部工具按联系人分文件导出）。
+    // 旧版只挑「本人发的那一份」，于是**我在别人朋友圈下的留言全丢了**——
+    // 那些留言就躺在好友那几份文件里。
+    // 现在把所有候选都读进来合并，解析层再按作者归属分流：
+    // 本人的动态照旧入库，好友的动态只取**我参与的部分**。
     let firstParsed = null;
+    const mergedPosts = [];
+    const seenPostIds = new Set();
+    let mergedMeta = null;
+    let mergedOwner = '';
+    // 先探一遍哪个账号标识能留下「本人发的」记录。
+    // 目录里第一个文件可能是**好友**那份，它的 account 是好友的——
+    // 直接拿第一个文件的 account，raw 的 owner 就写成别人了。
+    let ownerFromKept = '';
     for (const candidate of candidates) {
       let parsed = null;
       try {
@@ -1096,19 +1144,42 @@ export async function importWx(runtime, body, options = {}) {
         // 读不到或不是合法 JSON，换下一个候选
         continue;
       }
+      const list = Array.isArray(parsed?.posts) ? parsed.posts
+        : Array.isArray(parsed?.moments) ? parsed.moments : [];
+      if (!list.length) continue;
       if (!firstParsed) firstParsed = { payload: parsed, path: candidate };
-      // 外部工具按联系人分文件导出时，目录里会有好几份。
-      // 只有「本人发的那份」才留得下记录——不能拿第一份能解析的就用，
-      // 否则会导入到某个好友的朋友圈，然后报「没有一条是本人发的」。
-      const probe = parseWechatSns(parsed, { ownerWxid: forcedOwner });
-      if (probe.stats.kept > 0) {
-        payload = parsed;
-        sourcePath = candidate;
-        break;
+      if (!mergedMeta) {
+        mergedMeta = parsed.meta && typeof parsed.meta === 'object' ? parsed.meta : {};
+        mergedOwner = mergedMeta.account || parsed.account || parsed.username || '';
+      }
+      if (!ownerFromKept) {
+        const probe = parseWechatSns(parsed, { ownerWxid: forcedOwner });
+        if (probe.stats.kept > 0) ownerFromKept = probe.stats.owner || '';
+      }
+      for (const post of list) {
+        // 同一个动态可能出现在多份文件里（「昵称.json」和约定名各一份），
+        // 不去重的话条数会翻倍。
+        const key = String(post?.id ?? post?.tid ?? '').trim();
+        if (key) {
+          if (seenPostIds.has(key)) continue;
+          seenPostIds.add(key);
+        }
+        mergedPosts.push(post);
       }
     }
-    if (!payload && firstParsed) {
-      // 每一份都没有本人发的记录：留第一份，后面照常如实报错。
+    if (mergedPosts.length) {
+      const owner = forcedOwner || ownerFromKept || mergedOwner;
+      // 顶层也放一份 account / username：两种契约形状的解析器都认。
+      payload = {
+        ...firstParsed.payload,
+        meta: { ...mergedMeta, account: owner },
+        account: owner,
+        username: owner,
+        posts: mergedPosts,
+      };
+      sourcePath = `${candidates.length} 个文件`;
+    } else if (firstParsed) {
+      // 一份能解析的都没有：留第一份，后面照常如实报错。
       payload = firstParsed.payload;
       sourcePath = firstParsed.path;
     }
@@ -1127,7 +1198,11 @@ export async function importWx(runtime, body, options = {}) {
   }
 
   const forcedOwner = String(body?.owner ?? '').trim();
-  const probe = parseWechatSns(payload, { ownerWxid: forcedOwner });
+  // 2.1：互动数据（我在别人朋友圈下的留言、我的点赞）默认纳入。
+  // 数据里没有 myComments / myLike 标记时，这条路径不会产出任何东西——
+  // 所以「开」不会凭空多出记录。
+  const includeInteractions = body?.interactions !== false;
+  const probe = parseWechatSns(payload, { ownerWxid: forcedOwner, includeInteractions });
 
   if (!probe.stats.total) {
     return {
@@ -1136,7 +1211,7 @@ export async function importWx(runtime, body, options = {}) {
       targetDir: store.rawDir,
     };
   }
-  if (!probe.stats.kept) {
+  if (!probe.stats.kept && !probe.stats.comments && !probe.stats.likes) {
     // 一条都没留下只有两种可能：作者对不上，或者这份数据本来就不是本人账号。
     // 如实说清是哪一种，不要糊一句「导入失败」。
     return {
@@ -1154,16 +1229,25 @@ export async function importWx(runtime, body, options = {}) {
   // 覆盖会把之前攒下的记录抹掉，历史永远攒不齐。
   const existing = await store.readRaw('wechat_sns.json');
   const merge = mergeWechatSnsPayload(payload, existing);
-  await store.writeRaw('wechat_sns.json', merge.payload);
+  // 落盘只留**我需要的部分**：我的动态 + 我留言过的动态 + 我点赞过的动态。
+  // 好友那些跟我无关的动态没必要留在本地（体积小一大截，隐私也更好）。
+  const minimized = minimizeWxPayload(merge.payload, forcedOwner || merge.payload?.meta?.account || '');
+  await store.writeRaw('wechat_sns.json', minimized);
 
   // 合并完重新数一遍，最终入库多少条以合并后的结果为准。
-  const final = parseWechatSns(merge.payload, { ownerWxid: forcedOwner });
+  const final = parseWechatSns(minimized, {
+    ownerWxid: forcedOwner,
+    includeInteractions,
+  });
   const owner = final.stats.owner || probe.stats.owner || '';
   await store.saveState({
     wx: {
       enabled: true,
       imported: true,
       count: final.stats.kept,
+      comments: final.stats.comments,
+      likes: final.stats.likes,
+      interactions: includeInteractions,
       owner,
       source: sourcePath === 'inline' ? 'inline' : 'file',
       importedAt: Date.now(),
@@ -1172,14 +1256,39 @@ export async function importWx(runtime, body, options = {}) {
   return {
     ok: true,
     count: final.stats.kept,
-    total: final.stats.total,
-    notMine: final.stats.notMine,
+    comments: final.stats.comments,
+    likes: final.stats.likes,
+    // total / notMine 说的是**这份数据**本身的样子，用导入时的统计；
+    // count / comments / likes 说的是最终入库多少条，用合并后的结果。
+    total: probe.stats.total,
+    notMine: probe.stats.notMine,
     owner,
     file: sourcePath === 'inline' ? 'inline' : basename(sourcePath),
     merged: merge.merged,
     added: merge.added,
     needRebuild: true,
   };
+}
+
+/**
+ * 把 payload 缩到「我需要的部分」。
+ *
+ * 目录里可能有几百条好友的动态，全存进 raw 又大又没意义。
+ * 只留三类：本人发的、我留言过的、我点赞过的。
+ * 留言记录需要被回复那条的原文当上下文，所以那部分必须留着。
+ */
+function minimizeWxPayload(payload, ownerWxid) {
+  const owner = stripDeviceSuffix(ownerWxid || '');
+  const list = Array.isArray(payload?.posts) ? payload.posts : [];
+  if (!owner || !list.length) return payload;
+  const kept = list.filter((post) => {
+    const author = stripDeviceSuffix(String(post?.author ?? post?.username ?? ''));
+    if (author === owner) return true;
+    if (Array.isArray(post?.myComments) && post.myComments.length) return true;
+    if (post?.myLike) return true;
+    return false;
+  });
+  return { ...payload, posts: kept, postCount: kept.length };
 }
 
 async function switchWx(runtime, body) {

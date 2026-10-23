@@ -443,6 +443,9 @@ async function readExportSession(dataDir) {
     return null;
   }
   if (!status || typeof status !== 'object') return null;
+  // 旧版状态文件没有 browserPid（那时还没有常驻浏览器）。
+  // 直接当成「没有会话」，别让页面误报「浏览器已关闭」。
+  if (!('browserPid' in status)) return null;
   const browserAlive = isPidAlive(status.browserPid);
   const loginReady = Boolean(status.loginReady);
   return {

@@ -342,6 +342,12 @@ const serverSource = await readFile(join(pluginRoot, 'miniapp', 'node', 'server.
   check('会话状态不泄露完整 CDP 地址以外的敏感信息', () => {
     assert.ok(/cdpEndpoint/.test(serverSource));
   });
+  check('旧版状态文件（没有 browserPid）不当成会话', () => {
+    assert.ok(
+      /if \(!\('browserPid' in status\)\) return null;/.test(serverSource),
+      '缺少旧格式判别，页面会误报「浏览器已关闭」',
+    );
+  });
 }
 
 console.log('\n== 5. 页面提示（miniapp/client/index.html）==\n');

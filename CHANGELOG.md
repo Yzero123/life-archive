@@ -28,6 +28,39 @@ git revert <commit-sha>      # 逐个撤销
 
 ---
 
+## 未发布 — 取数指引按本机实测修正（代码一行未改）
+
+2026-10-23 在本机（macOS 26.5.2 · Apple Silicon · 微信 4.1.15）实跑了一次
+WeChatDataAnalysis 2.10.0，抓密钥没成功。查官方源码定位到两个根因，指引因此改写。
+
+### 修正的事实
+
+| 事项 | 之前写的 | 实测 / 源码结论 |
+|---|---|---|
+| 受控组件路径 | 可用，切「开发者工具」就够 | **本机走不通**。官方源码 `macos_db_key_helper._process_access_denied_error()` 判据：微信 `hardened runtime=True` 且 `get_task_allow=False` 即必然报 `TARGET_PROCESS_PROTECTED`。官方对该错误的说明原文是「**这不是"开发者工具"开关未开启，无需反复切换该设置**」 |
+| 兜底路径卡点 | 含糊写成「需要开发者工具授权」 | 卡在 **prepare 阶段的权限硬检查**：`os.access(/Applications/WeChat.app, W_OK)` 为 False（默认 `root:wheel` 755）→ `in_place_restore_permissions_unsafe`。`/Applications` 本身是 `root:admin` 可写，**只有微信顶层目录这一条**要放开组写权限 |
+| 密钥落点 | `~/.wcdb-key-tool/` | 数据库密钥在 `~/.wcdb-key-tool/wechat-passphrase.json`（64 位 hex）；`…/wechat-data-analysis-desktop/output/account_keys.json` 只是**图片密钥**，不能代替 |
+
+### 顺带确认的好消息
+
+- 工具的**自动发现**已实测通过：`Documents/xwechat_files/<账号>/db_storage` 下 18 个库全部识别，目录布局与官方文档写的路径不同也不影响。
+
+### 新增
+
+| 项 | 说明 |
+|---|---|
+| `tools/wx-path-check.py` | 只读预判脚本。点「获取」之前跑一次，直接告诉你要不要改权限、会不会撞 `TARGET_PROCESS_PROTECTED`、调试授权够不够 |
+
+### 改动文件
+
+- `微信朋友圈取数操作指引.md`（§2.3 / §3 整段 / §6 / §9）
+- `tools/wx-path-check.py`（新增）
+
+> 验证：1.0 回归 121 项、2.0 朋友圈 62 项、隐私回扫 18 项全过。**插件代码一行未改**，
+> 已安装的 v2.0.2 不受影响，无需重新安装。
+
+---
+
 ## v2.0.2 — 2026-10-23
 
 **归一化器支持 WeChatDataAnalysis 的导出形状，导入按钮会扫到它的导出目录。**

@@ -1,12 +1,44 @@
 // MCP 服务器本地冒烟测试：真启动、真发 JSON-RPC、真调工具。
 // 用法：node tests/mcp-smoke.mjs [dataDir]
 import { spawn } from 'node:child_process';
-import { resolve } from 'node:path';
+import { readFile } from 'node:fs/promises';
+import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const pluginRoot = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const dataDir = process.argv[2]
   || `${process.env.HOME}/.minimax/v2/plugin-data/liveboards/qq-space-kb`;
+
+/**
+ * 期望的数字**从知识库里现算**，不写死。
+ *
+ * 写死过一次（91 / 46 / 2012-2026），结果知识库一重建测试就挂——
+ * 那是测试的锅，不是代码的锅。数字应该由数据自己说了算。
+ * 这里只读文件，不夹带任何用户数据进测试源码。
+ */
+async function readExpected() {
+  let text = '';
+  try {
+    text = await readFile(join(dataDir, 'kb', 'unified.jsonl'), 'utf8');
+  } catch {
+    return null;
+  }
+  const rows = text.split('\n').filter((line) => line.trim()).map((line) => JSON.parse(line));
+  const years = rows
+    .map((row) => Number(row.published_at ?? 0))
+    .filter((ts) => Number.isFinite(ts) && ts > 0)
+    .map((ts) => String(new Date(ts * 1000).getUTCFullYear()))
+    .sort();
+  return {
+    total: rows.length,
+    recovered: rows.filter((row) => row.recovered).length,
+    bodyMissing: rows.filter((row) => row.body_missing).length,
+    yearFrom: years[0] ?? '',
+    yearTo: years[years.length - 1] ?? '',
+  };
+}
+
+const expected = await readExpected();
 
 const child = spawn(process.execPath, [resolve(pluginRoot, 'mcp', 'kb-mcp.mjs')], {
   env: { ...process.env, QQ_SPACE_KB_DATA_DIR: dataDir },
@@ -99,10 +131,11 @@ try {
   console.log('\n== kb_stats ==');
   const stats = parseTool(await call('tools/call', { name: 'kb_stats', arguments: {} }));
   check('知识库非空', stats.knowledgeBaseExists === true);
-  check('总数 91', stats.totalRecords === 91, String(stats.totalRecords));
-  check('恢复 46', stats.recoveredRecords === 46, String(stats.recoveredRecords));
-  check('正文缺失 44', stats.recoveredBodyMissing === 44, String(stats.recoveredBodyMissing));
-  check('年份跨度 2012-2026', stats.yearFrom === '2012' && stats.yearTo === '2026', `${stats.yearFrom}-${stats.yearTo}`);
+  check('能读到知识库内容用于对账', expected !== null && expected.total > 0);
+  check('总数与知识库一致', stats.totalRecords === expected.total, `${stats.totalRecords} vs ${expected.total}`);
+  check('恢复数与知识库一致', stats.recoveredRecords === expected.recovered, `${stats.recoveredRecords} vs ${expected.recovered}`);
+  check('正文缺失数与知识库一致', stats.recoveredBodyMissing === expected.bodyMissing, `${stats.recoveredBodyMissing} vs ${expected.bodyMissing}`);
+  check('年份跨度与知识库一致', stats.yearFrom === expected.yearFrom && stats.yearTo === expected.yearTo, `${stats.yearFrom}-${stats.yearTo} vs ${expected.yearFrom}-${expected.yearTo}`);
   check('有年份分布明细', Array.isArray(stats.yearDistribution) && stats.yearDistribution.length > 0);
   const dist = stats.yearDistribution ?? [];
   check('分布按年份升序', dist.every((row, i) => i === 0 || row.year > dist[i - 1].year));

@@ -16,7 +16,7 @@
 
 **方式一：直接导入 zip**（推荐给不想折腾 git 的人）
 
-下载 [`releases/qq-space-kb-1.6.1.zip`](releases/qq-space-kb-1.6.1.zip)，
+下载 [`releases/qq-space-kb-1.6.2.zip`](releases/qq-space-kb-1.6.2.zip)，
 在 MCode 里安装 Mini App 时选择这个包。
 
 **方式二：clone 后本地安装**
@@ -113,7 +113,7 @@ qq-space-kb/
 │   ├── qzone_session.js         # 常驻浏览器会话管理器（一次扫码的关键）
 │   └── qzone_feed_recover.js    # 已删除说说回溯探针（实测可用）
 └── tests/
-    ├── test.mjs                 # 104 项回归断言
+    ├── test.mjs                 # 110 项回归断言
     ├── export-session.mjs       # 「一次扫码」回归：会话管理器 / 编排器 / 接线 / 页面
     ├── mcp-smoke.mjs            # MCP 服务器冒烟测试
     ├── visualizer-static.mjs    # 可视化样例静态审查
@@ -121,7 +121,7 @@ qq-space-kb/
 
 qq-kb-pipeline/                   # 早期 Python 参考实现（合并/切块/摘要 + AstrBot 接入）
 QQ空间说说知识库方案.md           # 选型调研 + 关键工程点复盘
-releases/qq-space-kb-1.6.1.zip   # 可直接导入的安装包
+releases/qq-space-kb-1.6.2.zip   # 可直接导入的安装包
 ```
 
 Node 侧只用内置模块，**没有 npm 运行时依赖**；页面不加载任何远程资源。
@@ -159,8 +159,8 @@ Node 侧只用内置模块，**没有 npm 运行时依赖**；页面不加载任
 
 ```bash
 cd qq-space-kb
-node tests/test.mjs              # 104 项断言
-node tests/export-session.mjs    # 43 项断言：一次扫码（会话管理器 / 编排器 / 接线 / 页面）
+node tests/test.mjs              # 110 项断言
+node tests/export-session.mjs    # 48 项断言：一次扫码（会话管理器 / 编排器 / 接线 / 页面）
 node tests/mcp-smoke.mjs         # MCP 服务器冒烟：真启动、真发 JSON-RPC、真调五个工具
 node tests/visualizer-static.mjs # 可视化样例静态审查：信封、主题 token、安全、载荷
 node tests/plugin-package.mjs    # 插件包结构校验：清单、路径、包体积、frontmatter、凭证

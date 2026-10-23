@@ -81,6 +81,26 @@ export function moodCellIdOwnerUin(cellId) {
   return Buffer.from(id.slice(0, 16), 'hex').readUInt32LE(0);
 }
 
+/**
+ * 这个 cell_id 有可能是一条「说说」吗？
+ *
+ * 真正的说说 ID 是 24 位十六进制（如 `2301ca0e2ff5db504d210300`）。
+ * 我们自己合成的占位 ID（正文没捞回来、但发布时间能从 feed 反解的那些）
+ * 带 `history-v2:` / `history-guestbook:` 前缀。
+ *
+ * 其它形态都不是说说——最典型的是互动中心**留言板**卡片用的哨兵 `richinfo`，
+ * 它带的是别人在我留言板上的留言。放进知识库等于让 bot 替别人说话。
+ */
+export function isPlausibleCellId(cellId) {
+  const id = String(cellId ?? '').trim();
+  if (!id) return false;
+  if (/^[0-9a-f]{24}$/i.test(id)) return true;
+  if (id.startsWith(HISTORY_CELL_PREFIX)) return true;
+  if (id.startsWith(HISTORY_GUESTBOOK_PREFIX)) return true;
+  if (id.startsWith(HISTORY_FEED_PREFIX)) return true;
+  return false;
+}
+
 /** 各种时间表达 → unix 秒；不可解析返回 0。 */
 export function toTimestamp(value) {
   if (value === null || value === undefined || value === '') return 0;
@@ -437,6 +457,15 @@ export function parseQzoneArchive(payload, ownerUin = '') {
     const cellId = String(row.cell_id ?? row.cellId ?? '');
     const content = cleanText(row.content);
     if (!content && !cellId) continue;
+
+    // cell_id 必须长得像一条说说的 ID（24 位十六进制），或者是我们自己
+    // 合成的占位 ID。别的形态一律丢掉。
+    //
+    // 踩过的坑：互动中心的**留言板**卡片用一个叫 `richinfo` 的哨兵 cell_id，
+    // 它带的是**别人在我留言板上的留言**（"×××：以后生个娃儿……"）。
+    // 收进来的话，bot 会把别人写的留言当成「我说过的话」讲出来——
+    // 比漏回溯一条严重得多（旧库就因此多出一条 2026 年的假记录）。
+    if (!isPlausibleCellId(cellId)) continue;
 
     // 这条内容不是我发的，就别当「我的说说」收进来。
     // 互动残留里混着「我评论过的别人的动态」——cell_id 前 8 位编码的就是作者 QQ 号。

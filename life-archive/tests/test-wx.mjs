@@ -626,7 +626,7 @@ console.log('\n[5] 服务端路由端到端（真实 HTTP）');
 const dataDir = await mkdtemp(join(tmpdir(), 'qq-kb-wx-test-'));
 await mkdir(join(dataDir, 'raw'), { recursive: true });
 
-const QQ_OWNER = '1927686067';
+const QQ_OWNER = '12345678';
 function moodId(tsValue, suffix) {
   const le = (n) => {
     const buf = Buffer.alloc(4);
@@ -753,11 +753,43 @@ try {
     assert.ok(!profileRes2.facts.includes('朋友圈'));
   });
 
-  const clearRes = await call('/api/wx/clear', { method: 'POST', body: JSON.stringify({}) });
+  // 3.0.1：删除原始数据必须显式确认，没确认时一个字节都不能动。
+  const clearRefused = await call('/api/wx/clear', { method: 'POST', body: JSON.stringify({}) });
+  check('删除朋友圈原始数据没确认时被拒绝', () => {
+    assert.equal(clearRefused.ok, false);
+    assert.equal(clearRefused.error, 'confirmation_required');
+    assert.ok(clearRefused.scope, '应返回影响范围');
+  });
+  const stillThere = await readFile(join(dataDir, 'raw', 'wechat_sns.json'), 'utf8');
+  check('没确认时原始数据还在', () => {
+    assert.ok(stillThere.length > 0);
+  });
+
+  const clearRes = await call('/api/wx/clear', { method: 'POST', body: JSON.stringify({ confirm: true }) });
   check('可以清掉朋友圈原始数据', () => {
     assert.equal(clearRes.ok, true);
+    assert.ok(clearRes.backup, '应返回回收站备份信息');
   });
   await assert.rejects(() => readFile(join(dataDir, 'raw', 'wechat_sns.json'), 'utf8'));
+
+  // 3.0.1：删掉的东西要能从回收站恢复。
+  const wxTrash = await call('/api/trash');
+  const wxEntry = wxTrash.items.find((item) => item.scope === 'wx');
+  check('删掉的朋友圈数据进了回收站', () => {
+    assert.ok(wxEntry, '回收站里应有朋友圈条目');
+    assert.equal(wxEntry.files.length, 1);
+  });
+  const wxRestored = await call('/api/trash/restore', {
+    method: 'POST',
+    body: JSON.stringify({ id: wxEntry.id, confirm: true }),
+  });
+  check('能从回收站恢复朋友圈原始数据', () => {
+    assert.equal(wxRestored.ok, true);
+  });
+  const wxBack = await readFile(join(dataDir, 'raw', 'wechat_sns.json'), 'utf8');
+  check('恢复后原始数据内容一样', () => {
+    assert.equal(wxBack, stillThere);
+  });
 
   const importBad = await call('/api/wx/import', {
     method: 'POST',

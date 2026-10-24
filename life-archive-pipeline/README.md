@@ -106,7 +106,7 @@ python3 src/merge_sources.py \
 QQ 空间标准说说 ID 前 16 位十六进制里藏着两个 u32（小端）：
 
 ```
-b327e672 e295585b b4ceb0500
+4e61bc00 e295585b b4ceb0500
 └─ 小端u32 = 空间主人QQ号 ─┘ └─ 小端u32 = 发布时间戳 ─┘
 ```
 
@@ -147,7 +147,7 @@ python3 src/build_chunks.py --input out/kb/unified.jsonl --out out/kb
 [互动] 2条评论 / 18个赞
 [正文] 今天把 QQ 空间历史说说整理成离线网页了，翻旧内容终于不再费劲。
 [评论摘录] 小明: 牛啊 | 小红: 这事儿你干了多久了
-[原文] https://user.qzone.qq.com/12345678/mood/b327e672...
+[原文] https://user.qzone.qq.com/12345678/mood/4e61bc00...
 ```
 
 **为什么把元数据拼进正文**：说说是超短文本（几十字），纯正文嵌入召回会飘。

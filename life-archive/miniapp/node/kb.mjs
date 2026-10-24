@@ -7,6 +7,16 @@
 //   - 中文友好的 BM25 检索（字符二元组，无需分词器）
 //   - 接地校验：答案必须落在检索到的上下文里
 
+import {
+  MAX_COMMENTS,
+  MAX_CONTENT_CHARS,
+  MAX_LIKE_USERS,
+  MAX_MEDIA,
+  MAX_RECORDS,
+  MAX_DIGEST_CHARS,
+  capText,
+} from './limits.mjs';
+
 export const QZONE_LAUNCH_TS = 1104537600; // 2005-01-01 UTC
 
 /**
@@ -140,7 +150,7 @@ export function moodCellIdOwnerUin(cellId) {
 /**
  * 这个 cell_id 有可能是一条「说说」吗？
  *
- * 真正的说说 ID 是 24 位十六进制（如 `b327e6725f60718293a4b5c`）。
+ * 真正的说说 ID 是 24 位十六进制（如 `4e61bc005f60718293a4b5c`）。
  * 我们自己合成的占位 ID（正文没捞回来、但发布时间能从 feed 反解的那些）
  * 带 `history-v2:` / `history-guestbook:` 前缀。
  *
@@ -352,9 +362,11 @@ export function parseQzoneExport(payload) {
 
   const records = [];
   for (const item of items) {
+    // 3.0.1：总量上限。超了就不再收——不让一个畸形文件把内存吃光。
+    if (records.length >= MAX_RECORDS) break;
     if (!item || typeof item !== 'object') continue;
     const tid = String(item.tid ?? '').trim();
-    const content = cleanText(item.custom_content || item.content || '');
+    const content = capText(cleanText(item.custom_content || item.content || ''), MAX_CONTENT_CHARS);
     if (!tid && !content) continue;
 
     let publishedAt = toTimestamp(item.created_time);
@@ -367,15 +379,15 @@ export function parseQzoneExport(payload) {
     record.published_at = publishedAt;
     record.time_source = publishedAt ? TIME_SOURCE.EXACT : TIME_SOURCE.UNKNOWN;
     record.content = content;
-    record.images = pickMedia(item.pic, ['hd_url', 'b_url', 'url', 'origin_url']);
-    record.videos = pickMedia(item.video, ['play_url', 'url', 'video_url']);
+    record.images = pickMedia(item.pic, ['hd_url', 'b_url', 'url', 'origin_url']).slice(0, MAX_MEDIA);
+    record.videos = pickMedia(item.video, ['play_url', 'url', 'video_url']).slice(0, MAX_MEDIA);
     record.location = pickLocation(item);
     // 赞数：导出工具的 like_count 是**转发**数，赞数要从 DOM 的「赞(N)」单独取。
     // 所以 likeTotal 优先；只有它缺失时才退回 like_count（宁可少也别转发当赞）。
     record.like_count = Number(item.likeTotal ?? 0);
     record.forward_count = Number(item.fwdnum ?? item.forward_count ?? 0);
-    record.like_users = pickLikes(item);
-    record.comments = pickComments(item);
+    record.like_users = pickLikes(item).slice(0, MAX_LIKE_USERS);
+    record.comments = pickComments(item).slice(0, MAX_COMMENTS);
     // 评论正文没抓到时，条数仍然算数（工具的 comment_count 是准的）。
     record.comment_count = Math.max(Number(item.cmtnum ?? item.comment_count ?? 0), record.comments.length);
     record.post_url = cleanText(item.post_url);
@@ -522,9 +534,11 @@ export function parseQzoneArchive(payload, ownerUin = '') {
 
   const records = [];
   for (const row of dynamics) {
+    // 3.0.1：总量上限（和 QZoneExport 同一把尺子）。
+    if (records.length >= MAX_RECORDS) break;
     if (!row || typeof row !== 'object') continue;
     const cellId = String(row.cell_id ?? row.cellId ?? '');
-    const content = cleanText(row.content);
+    const content = capText(cleanText(row.content), MAX_CONTENT_CHARS);
     if (!content && !cellId) continue;
 
     // cell_id 必须长得像一条说说的 ID（24 位十六进制），或者是我们自己
@@ -578,11 +592,11 @@ export function parseQzoneArchive(payload, ownerUin = '') {
     record.time_source = timeSource;
     record.first_interaction_at = bucket.times.length ? Math.min(...bucket.times) : 0;
     record.content = content;
-    record.images = archivePictures(row.pictures_json ?? row.picturesJson);
-    record.videos = archiveVideos(row.video_json ?? row.videoJson);
+    record.images = archivePictures(row.pictures_json ?? row.picturesJson).slice(0, MAX_MEDIA);
+    record.videos = archiveVideos(row.video_json ?? row.videoJson).slice(0, MAX_MEDIA);
     record.like_count = bucket.like_users.length;
-    record.like_users = bucket.like_users;
-    record.comments = bucket.comments;
+    record.like_users = bucket.like_users.slice(0, MAX_LIKE_USERS);
+    record.comments = bucket.comments.slice(0, MAX_COMMENTS);
     record.comment_count = bucket.comments.length;
     record.forward_count = 0;
     record.post_url = cellId && !cellId.startsWith(HISTORY_CELL_PREFIX) && !cellId.startsWith(HISTORY_GUESTBOOK_PREFIX)
@@ -1295,16 +1309,35 @@ export function buildYearSummaries(records) {
  * 检索不到任何具体说说，但只要把全库摆出来，模型自己就能答。
  * 早先的闸门是「检索不到就拒答」，问法一变就答不上，灵活度全丢在这。
  */
-export function buildKbDigest(records, { maxChars = 60 } = {}) {
+export function buildKbDigest(records, { maxChars = 60, maxTotalChars = MAX_DIGEST_CHARS } = {}) {
   const lines = [];
   const sorted = [...records].sort((a, b) => (b.published_at || 0) - (a.published_at || 0));
+  let used = 0;
+  let listed = 0;
+  let dropped = 0;
   for (const record of sorted) {
     if (record.kind === 'guestbook') continue;
     const date = record.published_at ? formatTimestamp(record.published_at, false) : '时间未知';
     const body = (record.content ?? '').trim();
     const text = body ? truncate(body, maxChars) : '（已删除，正文未恢复）';
     const flag = record.recovered ? ' · 已删除后恢复' : '';
-    lines.push(`${date}${flag} · ${text}`);
+    const line = `${date}${flag} · ${text}`;
+    // 3.0.1：全库速览有硬上限，超了就停。
+    // 截掉的是**更早**的记录（这里按时间倒序排），所以要跟模型说清楚，
+    // 不然它会以为「库里没有那些年份」——那是它自己在猜。
+    if (listed > 0 && used + line.length > maxTotalChars) {
+      dropped += 1;
+      continue;
+    }
+    lines.push(line);
+    listed += 1;
+    used += line.length + 1;
+  }
+  if (dropped > 0) {
+    lines.push(
+      `（全库速览按 ${maxTotalChars} 字上限截断：这里列出 ${listed} 条，另有 ${dropped} 条更早的记录没有出现在这段资料里；`
+      + '这些记录在知识库中仍可被检索命中。）',
+    );
   }
   return lines.join('\n');
 }

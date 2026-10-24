@@ -18,7 +18,7 @@
 // 所有数据都是合成的，不含任何真实身份信息。
 
 import { spawn } from 'node:child_process';
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -171,6 +171,19 @@ try {
     arguments: { query: '重建之后才写进去' },
   }));
   check('检索也用上了新知识块', search.hits?.length > 0, JSON.stringify(search).slice(0, 200));
+
+  console.log('\n== 同大小覆盖（内容变了、长度没变）==');
+  // 「mtime + 大小」这种指纹在这种情况下可能看不出来（同一秒内覆盖）。
+  // v3.0.1 起指纹是**内容哈希**，所以必须能发现。
+  const before = await readFile(join(kbDir, 'profile.json'));
+  const same = Buffer.from(before.toString('utf8').replace('第二版画像', '第三版画像'), 'utf8');
+  if (same.length !== before.length) {
+    failures += 1;
+    console.log('  ❌ 这条用例要求替换前后长度相同');
+  }
+  await writeFile(join(kbDir, 'profile.json'), same);
+  const third = parseTool(await call('tools/call', { name: 'kb_profile', arguments: {} }));
+  check('同大小覆盖也被发现（靠内容哈希，不是 mtime+size）', third.facts?.includes('第三版画像'), JSON.stringify(third.facts));
 } catch (error) {
   failures += 1;
   console.log(`  ❌ 测试过程抛错：${error.message}`);

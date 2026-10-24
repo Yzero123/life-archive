@@ -49,16 +49,16 @@ def run(args: list[str], cwd: Path) -> subprocess.CompletedProcess:
 def test_mood_id_decode() -> None:
     print("\n[1] 说说 ID 时间解码")
     # 取自 Rust 侧单元测试 decodes_original_publish_time_from_legacy_mood_id
-    cell_id = "b327e672e295585b4ceb0500"
+    cell_id = "4e61bc00e295585b4ceb0500"   # 前 8 位 = 合成 owner 12345678 的小端 u32
     check("正确 QQ 号解出发布时间",
-          kb.mood_cell_id_published_at(cell_id, "1927686067", 1_574_686_344) == 1_532_532_194,
-          str(kb.mood_cell_id_published_at(cell_id, "1927686067", 1_574_686_344)))
+          kb.mood_cell_id_published_at(cell_id, "12345678", 1_574_686_344) == 1_532_532_194,
+          str(kb.mood_cell_id_published_at(cell_id, "12345678", 1_574_686_344)))
     check("QQ 号不匹配时拒绝",
-          kb.mood_cell_id_published_at(cell_id, "1927686068", 1_574_686_344) is None)
+          kb.mood_cell_id_published_at(cell_id, "12345679", 1_574_686_344) is None)
     check("ID 过短时拒绝",
-          kb.mood_cell_id_published_at("abc", "1927686067", 0) is None)
+          kb.mood_cell_id_published_at("abc", "12345678", 0) is None)
     check("非法十六进制不抛异常",
-          kb.mood_cell_id_published_at("zzzzzzzzzzzzzzzz", "1927686067", 0) is None)
+          kb.mood_cell_id_published_at("zzzzzzzzzzzzzzzz", "12345678", 0) is None)
 
 
 def test_merge(workdir: Path) -> dict:
@@ -131,7 +131,7 @@ def test_chunks(workdir: Path, unified: Path) -> None:
     check("已恢复说说在块内带来源标记", bool(recovered_body))
     check("已恢复块仍带绝对时间", "[时间] 2017-03-20" in recovered_body, recovered_body[:80])
     check("评论被摘录进块", "[评论摘录]" in recovered_body, recovered_body[:200])
-    check("定位信息进入块", any("[位置] 上海市静安区" in b for b in bodies.values()))
+    check("定位信息进入块", any("[位置] 演示市演示区" in b for b in bodies.values()))
     check("未知时间的块显式标注",
           any("[时间] 未知" in b for b in bodies.values()))
     check("manifest.jsonl 生成", (out / "manifest.jsonl").exists())

@@ -327,8 +327,109 @@ function scanWxLiterals(text) {
     if (SYNTHETIC_WXID.test(match)) continue;
     hits.push({ kind: 'wxid 字面量（包内不该硬编码账号标识符）', needle: match });
   }
+
   return hits;
 }
+
+// ---------------------------------------------------------------------------
+// 3b. 结构性规则：QQ 号 / 说说 ID
+// ---------------------------------------------------------------------------
+//
+// 为什么要这一组（本项目真踩过）：
+//
+// v1.7.1 那次「修文档示例泄漏」的做法是——把一条**真实说说 ID**换成「合成示例」。
+// 但换上去的那条「合成示例」其实是**另一个真实 QQ 号的小端编码**：
+// 只是把真 ID 换成了另一条真 ID 派生出来的、看起来像合成值的串。
+// 于是从 v1.7.1 到 v3.0.0，那个真实 QQ 号一直躺在包里（还进了每个发布 zip），
+// 而回扫器**一次都没报**——因为它的指纹来自「本机真实数据」，
+// 而那个号不是本机这个人的，对它而言就是个陌生数字。
+// （具体号码不在这里写出来——写出来等于又泄漏一次。
+//   v3.0.1 起仓库里统一用合成号 12345678，它的 cell_id 前缀是 4e61bc00。）
+//
+// 教训：**靠「和已知数据比对」抓不出「混进来的陌生真实标识符」。**
+// 所以这里加一组**不依赖本机数据**的结构性规则：
+//   R1  说说链接里的 QQ 号（user.qzone.qq.com/<uin>）
+//   R2  字段名里带 uin 的账号标识（owner_uin / author_uin / uin= …）
+//   R3  说说 ID（cell_id）前 4 字节反解出来的 QQ 号
+// 三条都只认一张**登记在册的合成号白名单**，白名单之外一律判失败。
+
+/**
+ * 仓库里允许出现的合成 QQ 号。
+ *
+ * 规矩：仓库样例里的「空间主人」统一用 12345678，
+ * 边界测试用的「他人 / 错一位的号」用 12345679 / 87654321。
+ * 新增合成号时必须显式登记——**没登记的一律当泄漏处理**。
+ */
+const SYNTHETIC_QQ_OWNERS = new Set([
+  '12345678',   // 合成空间主人（样例说说 ID 前 8 位就是它）
+  '12345679',   // 边界测试：与主人只差最后一位
+  '87654321',   // 边界测试：他人（反解必须失败）
+]);
+
+/** QQ 号形状：7–11 位十进制。 */
+const QQ_SHAPE = /^[1-9][0-9]{6,10}$/;
+
+/** 说说链接里的空间主人。 */
+const QZONE_URL_UIN = /user\.qzone\.qq\.com\/([0-9]{5,12})/g;
+
+/** 字段名里明确带 uin 的账号标识。 */
+const UIN_FIELD = /(?:^|[^A-Za-z])(?:owner_uin|author_uin|actor_uin|original_author_uin|"uin"|'uin'|uin=)"?\s*[:=]\s*"?([0-9]{5,12})"?/g;
+
+/**
+ * 说说 ID 的形状：16 / 23 / 24 位十六进制。
+ *
+ * 16 = 8 字节、24 = 12 字节，是真实 cell_id 的两种长度；
+ * 23 是本仓库历史样例用过的长度（少一位），一并覆盖，免得换成长度就漏掉。
+ *
+ * 刻意**不**用「任意长度的十六进制串」：
+ * 文档里的雪花 ID 示例（`1234567890123456789`，19 位）、u64 上限（20 位）、
+ * 占位串（`aaaa…`，32 位）都会落进那个范围，但它们都不是 cell_id——
+ * 放宽长度只会制造误报，误报一多，门就没人信了。
+ */
+const CELL_ID = /(?<![0-9a-fA-F])([0-9a-fA-F]{16}|[0-9a-fA-F]{23}|[0-9a-fA-F]{24})(?![0-9a-fA-F])/g;
+
+/** 单一字符重复串（aaaa… / bbbb…）是占位符，不是 ID。 */
+function isPlaceholderHex(value) {
+  return /^([0-9a-f])\1+$/i.test(value);
+}
+
+/** cell_id 前 8 位十六进制 = 小端 u32 = 作者 QQ 号。 */
+function ownerOfCellId(cellId) {
+  try {
+    return String(Buffer.from(cellId.slice(0, 8), 'hex').readUInt32LE(0));
+  } catch {
+    return '';
+  }
+}
+
+function scanSyntheticQqRules(text) {
+  const hits = [];
+
+  for (const match of text.matchAll(QZONE_URL_UIN)) {
+    const uin = match[1];
+    if (SYNTHETIC_QQ_OWNERS.has(uin)) continue;
+    hits.push({ kind: '说说链接里的 QQ 号不在合成白名单', needle: `${match[0]}` });
+  }
+
+  for (const match of text.matchAll(UIN_FIELD)) {
+    const uin = match[1];
+    if (!QQ_SHAPE.test(uin)) continue;          // 5 位以下的多半是样例里的 10001
+    if (SYNTHETIC_QQ_OWNERS.has(uin)) continue;
+    hits.push({ kind: '账号标识字段里的 QQ 号不在合成白名单', needle: `${match[0].trim()}` });
+  }
+
+  for (const match of text.matchAll(CELL_ID)) {
+    const cellId = match[1];
+    if (isPlaceholderHex(cellId)) continue;
+    const uin = ownerOfCellId(cellId);
+    if (!QQ_SHAPE.test(uin)) continue;
+    if (SYNTHETIC_QQ_OWNERS.has(uin)) continue;
+    hits.push({ kind: '说说 ID 前 4 字节反解出非白名单 QQ 号', needle: `${cellId} → ${uin}` });
+  }
+
+  return hits;
+}
+
 
 // ---------------------------------------------------------------------------
 // 3. 回扫
@@ -376,42 +477,53 @@ function scanText(text, fp, wxfp) {
 
 async function scanTarget(target, label, fp, wxfp) {
   const hits = [];
+  const where = (file) => relative(REPO_ROOT, file);
   if (existsSync(target) && (await stat(target)).isDirectory()) {
     for (const file of await walk(target)) {
       if (!TEXT_EXT.has(extname(file))) continue;
       const text = await readFile(file, 'utf8').catch(() => '');
       if (!text) continue;
       for (const hit of scanText(text, fp, wxfp)) {
-        hits.push({ ...hit, where: relative(PKG_ROOT, file) });
+        hits.push({ ...hit, where: where(file) });
       }
-      // 结构性规则：包内不许出现 wxid 字面量（和本机数据无关，永远生效）
+      // 结构性规则：不依赖本机数据，永远生效
       for (const hit of scanWxLiterals(text)) {
-        hits.push({ ...hit, where: relative(PKG_ROOT, file) });
+        hits.push({ ...hit, where: where(file) });
+      }
+      for (const hit of scanSyntheticQqRules(text)) {
+        hits.push({ ...hit, where: where(file) });
       }
     }
   } else {
     const text = await readFile(target, 'utf8').catch(() => '');
     hits.push(...scanText(text, fp, wxfp).map((h) => ({ ...h, where: label })));
     hits.push(...scanWxLiterals(text).map((h) => ({ ...h, where: label })));
+    hits.push(...scanSyntheticQqRules(text).map((h) => ({ ...h, where: label })));
   }
   return hits;
 }
 
-console.log('\n[隐私回扫] 用本机真实数据展开指纹，回扫包内文件与发布 zip\n');
+console.log('\n[隐私回扫] 用本机真实数据展开指纹，回扫仓库文件与发布 zip\n');
 
 const real = await findRealKb();
-if (!real) {
-  console.log('  ℹ️ 本机没有找到真实知识库（liveboards/*/kb/unified.jsonl），跳过回扫。');
-  console.log('     CI / 别人的机器上这是正常行为。');
-  console.log(`\n通过 ${checks} 项，失败 ${failures.length} 项`);
-  process.exit(failures.length ? 1 : 0);
-}
+const wxRaw = real ? await findRealWxRaw(real.dirs ?? CANDIDATE_DIRS) : null;
 
-const fp = buildFingerprints(real.records);
-const wxRaw = await findRealWxRaw(real.dirs ?? CANDIDATE_DIRS);
+// 指纹来自「本机真实数据」，所以没有本机数据时这一层查不了。
+// 但**结构性规则不需要任何本机数据**（wxid 字面量、QQ 号白名单、说说 ID 反解），
+// 它们在任何机器上都必须生效——CI 上没有真实知识库时也得能查。
+// 所以：没有本机数据不退出，只是少查一层，并在输出里说清楚。
+const fp = real ? buildFingerprints(real.records) : {
+  qqAll: [], cellIds: [], ownerHex: [], cellPrefix16: [], urls: [], nicknames: [], windows: [], numbers: [],
+};
 const wxfp = wxRaw ? buildWxFingerprints(wxRaw.payload) : null;
-console.log(`  真实知识库：${real.dir}`);
-console.log(`  指纹规模：QQ 号 ${fp.qqAll.length} 种写法 / 说说 ID ${fp.cellIds.length} / owner 前缀 ${fp.ownerHex.length} / 文本片段 ${fp.windows.length} / 聚合数字 ${fp.numbers.length}`);
+
+if (real) {
+  console.log(`  真实知识库：${real.dir}`);
+  console.log(`  指纹规模：QQ 号 ${fp.qqAll.length} 种写法 / 说说 ID ${fp.cellIds.length} / owner 前缀 ${fp.ownerHex.length} / 文本片段 ${fp.windows.length} / 聚合数字 ${fp.numbers.length}`);
+} else {
+  console.log('  ℹ️ 本机没有找到真实知识库（liveboards/*/kb/unified.jsonl）。');
+  console.log('     「与本机数据比对」这一层跳过，**结构性规则照常生效**。');
+}
 if (wxfp) {
   console.log(`  朋友圈指纹：wxid ${wxfp.wxids.length} 个 / 动态 ID ${wxfp.snsIds.length} 个`);
 } else {
@@ -468,9 +580,70 @@ if (fp.nicknames.length) {
   });
 }
 
+// 3.5 结构性规则的自检：QQ 号白名单 / 说说 ID 反解
+//
+// 这一组**不依赖本机数据**，所以在 CI 上也必须能验。
+// 正样本必须抓得住：把「陌生真实号」分别放进三种载体（链接 / 字段 / cell_id）。
+// 反样本必须抓不住：仓库自己登记在册的合成号。
+console.log('\n[自检] 结构性规则（QQ 号白名单 / 说说 ID 反解）');
+
+// 自检用的「陌生号」是 987654321：明显是合成值，但**不在白名单里**。
+// 不能拿真实 QQ 号当样本——那等于把真号又写回仓库一次（自撞）。
+//
+// 说说 ID 也要**运行时拼**：文件里若留下 16/24 位十六进制字面量，
+// 扫描器会把自己的自检样例当成泄漏（自撞）。
+// 所以这里只留 8 位的前缀和 8 位的后缀，拼接在运行时完成。
+const UNLISTED_UIN = '987654321';
+const CELL_ID_TAIL = '5f607182' + '93a4b5c6';
+const cellIdOf = (uin) => {
+  const buf = Buffer.alloc(4);
+  buf.writeUInt32LE(Number(uin) >>> 0);
+  return buf.toString('hex') + CELL_ID_TAIL;
+};
+const UNLISTED_CELL_ID = cellIdOf(UNLISTED_UIN);   // 前 8 位 → 987654321
+const SYN_CELL_ID = cellIdOf('12345678');          // 前 8 位 → 白名单里的 12345678
+
+ok('正样本：说说链接里的陌生 QQ 号被抓', () => {
+  const hits = scanSyntheticQqRules(`见 https://user.qzone.qq.com/${UNLISTED_UIN}/mood/abc`);
+  assert(hits.length === 1, `没抓到：${JSON.stringify(hits)}`);
+});
+ok('正样本：字段里的陌生 QQ 号被抓', () => {
+  const hits = scanSyntheticQqRules(`{\"owner_uin\": \"${UNLISTED_UIN}\"}`);
+  assert(hits.length === 1, `没抓到：${JSON.stringify(hits)}`);
+});
+ok('正样本：说说 ID 反解出陌生 QQ 号被抓', () => {
+  const hits = scanSyntheticQqRules(`示例 ID ${UNLISTED_CELL_ID}`);
+  assert(hits.length === 1, `没抓到：${JSON.stringify(hits)}`);
+});
+ok('反样本：登记在册的合成号全部放行', () => {
+  const text = [
+    'https://user.qzone.qq.com/12345678/mood/abc',
+    '{"owner_uin": "12345678", "author_uin": "87654321"}',
+    `示例 ID ${SYN_CELL_ID}`,
+    '占位符 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+  ].join('\n');
+  const hits = scanSyntheticQqRules(text);
+  assert(hits.length === 0, `误报：${JSON.stringify(hits)}`);
+});
+ok('正样本：陌生号在链接 / 字段 / ID 三处都能被抓到（规则没被写死成一种形态）', () => {
+  const hits = scanSyntheticQqRules([
+    `https://user.qzone.qq.com/${UNLISTED_UIN}/mood/abc`,
+    `{\"author_uin\": \"${UNLISTED_UIN}\"}`,
+    `ID ${UNLISTED_CELL_ID}`,
+  ].join('\n'));
+  assert(hits.length === 3, `只抓到 ${hits.length} 处`);
+});
+
 console.log('');
 
-const targets = [{ path: PKG_ROOT, label: '包目录' }];
+// 回扫目标：**整个仓库**（不是只有包目录）。
+//
+// 为什么要扩到整个仓库：v3.0.1 修的那次泄漏就在 `life-archive-pipeline/` 里
+// （合成 fixture 与它的样例输出带着一个真实 QQ 号和精确地点），
+// 而当时回扫器只扫包目录 + 根文档，**管线目录完全在覆盖之外**。
+// 同一个真实号还会顺着 cell_id 派生、样例输出、文档示例一路扩散。
+// 所以覆盖范围必须以「仓库」为单位，而不是以「包」为单位。
+const targets = [{ path: REPO_ROOT, label: '仓库目录' }];
 const releasesDir = join(REPO_ROOT, 'releases');
 if (existsSync(releasesDir)) {
   for (const name of await readdir(releasesDir)) {
@@ -478,24 +651,6 @@ if (existsSync(releasesDir)) {
   }
 }
 
-// 仓库根目录的说明文档也要扫。
-// 2.0 的方案文档里曾经写着本机真实 wxid——那和 v1.3.0 文档示例里的真实 cell_id
-// 是同一类事故：写文档时「顺手」把真实标识符贴了进去。
-const docDirs = new Set([REPO_ROOT, resolve(PKG_ROOT, '..', '..', 'repo-life-archive')]);
-for (const dir of docDirs) {
-  if (!existsSync(dir)) continue;
-  let entries = [];
-  try {
-    entries = await readdir(dir, { withFileTypes: true });
-  } catch {
-    continue;
-  }
-  for (const entry of entries) {
-    if (!entry.isFile() || !entry.name.endsWith('.md')) continue;
-    targets.push({ path: join(dir, entry.name), label: `文档 ${entry.name}` });
-  }
-}
-// 同一个目录可能既是 REPO_ROOT 又是工作区里的兄弟目录，去重免得扫两遍。
 const seenTargets = new Set();
 for (const target of targets) {
   if (seenTargets.has(target.path)) continue;

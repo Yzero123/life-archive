@@ -12,7 +12,7 @@ import sqlite3
 import struct
 from pathlib import Path
 
-OWNER_UIN = "1927686067"
+OWNER_UIN = "12345678"   # 合成账号：cell_id 前 8 位就是它，绝不能是真实 QQ 号
 
 # 与 Rust 侧一致的建表语句
 SCHEMA = """
@@ -111,7 +111,7 @@ def build(out_dir: Path) -> tuple[Path, Path]:
             ],
             "likeTotal": 18,
             "likes": [{"fuin": 10001, "nick": "小刚"}, {"fuin": 10002, "nick": "小丽"}],
-            "lbs": {"address": "上海市静安区", "name": "静安寺", "pos_x": 121.44, "pos_y": 31.22},
+            "lbs": {"address": "演示市演示区", "name": "演示公园", "pos_x": 0.0, "pos_y": 0.0},
             "pic": [{"hd_url": "https://photo.example.com/a1.jpg"}],
             "video": [],
             "post_url": f"https://user.qzone.qq.com/{OWNER_UIN}/mood/{id_shared}",
@@ -119,14 +119,14 @@ def build(out_dir: Path) -> tuple[Path, Path]:
         },
         {
             "tid": id_qze_only,
-            "content": "换了新工作，搬到南京西路了。",
-            "custom_content": "换了新工作，搬到南京西路了。",
+            "content": "换了新工作，搬到演示路了。",
+            "custom_content": "换了新工作，搬到演示路了。",
             "created_time": ts_qze_only,
             "custom_create_time": "2016-01-01 00:00:00",
             "commentlist": [],
             "likeTotal": 3,
             "likes": [],
-            "lbs": {"address": "上海市静安区", "name": "南京西路"},
+            "lbs": {"address": "演示市演示区", "name": "演示路"},
             "pic": [],
             "video": [],
             "post_url": f"https://user.qzone.qq.com/{OWNER_UIN}/mood/{id_qze_only}",
@@ -190,7 +190,7 @@ def build(out_dir: Path) -> tuple[Path, Path]:
     )
 
     # 2) 仅归档库有：已删除说说，但保留了标准说说 ID → 可反解真实发布时间
-    add_dynamic(id_recovered, ts_recovered, "当年最后一次跨年是在外滩，人很多。")
+    add_dynamic(id_recovered, ts_recovered, "当年最后一次跨年是在江边，人很多。")
     add_feed(f"history-v2-event:217:{id_recovered}:{ts_recovered + 86400}", id_recovered, 217,
              ts_recovered + 86400, "20001", "好友甲")
     add_feed(
@@ -199,10 +199,10 @@ def build(out_dir: Path) -> tuple[Path, Path]:
         comments_json=json.dumps({
             "main_comment": {
                 "commentid": "c2", "user": {"uin": "20002", "nickname": "好友乙"},
-                "content": "外滩我记着呢", "date": ts_recovered + 90000,
+                "content": "江边我记着呢", "date": ts_recovered + 90000,
             }
         }, ensure_ascii=False),
-        summary="外滩我记着呢",
+        summary="江边我记着呢",
     )
 
     # 3) 仅归档库有：哈希型历史卡片 → 发布时间不可考，只能用互动时间近似

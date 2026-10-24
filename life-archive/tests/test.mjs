@@ -55,7 +55,7 @@ function check(name, fn) {
 // ---------------------------------------------------------------------------
 // 测试数据
 // ---------------------------------------------------------------------------
-const OWNER = '1927686067';
+const OWNER = '12345678';
 
 function moodId(ownerUin, ts, suffix) {
   const le = (n) => {
@@ -146,11 +146,11 @@ check('说说 ID 正确反解发布时间', () => {
 });
 check('QQ 号不匹配时拒绝', () => {
   const cellId = moodId(OWNER, TS_2018, 'aabb1122');
-  assert.equal(moodCellIdPublishedAt(cellId, '1927686068', TS_2018 + 100), null);
+  assert.equal(moodCellIdPublishedAt(cellId, '12345679', TS_2018 + 100), null);
 });
 check('非法 ID 不抛异常', () => {
-  assert.equal(moodCellIdPublishedAt('zzzzzzzzzzzzzzzz', '1927686067', 0), null);
-  assert.equal(moodCellIdPublishedAt('', '1927686067', 0), null);
+  assert.equal(moodCellIdPublishedAt('zzzzzzzzzzzzzzzz', '12345678', 0), null);
+  assert.equal(moodCellIdPublishedAt('', '12345678', 0), null);
 });
 
 const qzeRecords = parseQzoneExport(MESSAGES_JSON);
@@ -256,8 +256,8 @@ console.log('\n[1c] 作者归属');
 
 // ⚠️ 这里的 ID、QQ 号、内容**全部是合成的**。
 // 用真实账号的 cell_id / 说说正文 / 好友昵称来写测试，等于把个人信息塞进分发包。
-const OTHER_OWNER = '1827366067';
-const OWNER_PADDED = '01927686067'; // 同一个号，带前导 0
+const OTHER_OWNER = '87654321';
+const OWNER_PADDED = '012345678'; // 同一个号，带前导 0
 const MY_CELL = moodId(OWNER, TS_2018, 'aaaa1111');          // 作者 = OWNER
 const OTHER_CELL = moodId(OTHER_OWNER, TS_2018, 'bbbb2222'); // 作者 = 别人
 
@@ -924,11 +924,46 @@ try {
   });
 
   // 空知识库
-  await call('/api/reset', { method: 'POST', body: '{}' });
+  // 3.0.1：清空知识库必须显式确认。
+  // 没带 confirm 的时候接口要拒绝，**而且一个文件都不能动**。
+  const refused = await call('/api/reset', { method: 'POST', body: '{}' });
+  check('清空知识库没确认时被拒绝', () => {
+    assert.equal(refused.ok, false);
+    assert.equal(refused.error, 'confirmation_required');
+    assert.ok(refused.scope, '应返回影响范围');
+    assert.equal(refused.scope.totalRecords > 0, true, '影响范围里应有记录数');
+  });
+  const stillThere = await call('/api/state');
+  check('没确认时知识库原封不动', () => {
+    assert.equal(stillThere.kbReady, true);
+  });
+
+  await call('/api/reset', { method: 'POST', body: JSON.stringify({ confirm: true }) });
   const empty = await ask('你好');
   check('知识库为空时回固定话术', () => {
     assert.equal(empty.answer, FALLBACK);
     assert.equal(empty.reason, 'knowledge_base_empty');
+  });
+
+  // 3.0.1：清空之后要能从回收站恢复。
+  const trash = await call('/api/trash');
+  check('清空的知识库进了回收站', () => {
+    assert.equal(trash.ok, true);
+    const kbEntry = trash.items.find((item) => item.scope === 'kb');
+    assert.ok(kbEntry, '回收站里应有知识库条目');
+    assert.ok(kbEntry.files.length > 0);
+  });
+  const restored = await call('/api/trash/restore', {
+    method: 'POST',
+    body: JSON.stringify({ id: trash.items.find((item) => item.scope === 'kb').id, confirm: true }),
+  });
+  check('能从回收站恢复知识库', () => {
+    assert.equal(restored.ok, true);
+  });
+  const afterRestore = await call('/api/state');
+  check('恢复后记录数回来了', () => {
+    assert.equal(afterRestore.kbReady, true);
+    assert.equal(afterRestore.stats.totalRecords > 0, true);
   });
 
   // 搜索预览

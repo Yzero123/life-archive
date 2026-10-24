@@ -8,7 +8,7 @@
 
 import { emptyRecord } from '../../miniapp/node/kb.mjs';
 
-const OWNER = '1927686067';
+const OWNER = '12345678';   // 合成账号：仅用于编码演示，绝不是真实 QQ 号
 
 /** QQ 空间说说 ID：owner(小端 u32) + 时间戳(小端 u32) + 随机后缀。 */
 function moodId(ts, suffix) {

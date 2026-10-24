@@ -292,6 +292,9 @@
           <div class="field">
             <button id="btn-stop" class="danger" type="button" hidden>停止导出</button>
           </div>
+          <div class="field">
+            <button id="btn-reset-kb" class="danger" type="button" hidden>清空知识库</button>
+          </div>
         </div>
         <p class="hint">
           导出会打开 QQ 空间登录页，需要你本人用手机 QQ 扫码。抓取过程请勿切换 QQ 客户端账号，否则有封号风险。
@@ -304,6 +307,9 @@
             <span id="session-text">登录会话未启动</span>
           </p>
           <p class="hint" id="session-hint"></p>
+          <div class="row" style="margin-top: 10px">
+            <button id="btn-close-session" class="danger" type="button" hidden>关闭登录会话并清除登录态</button>
+          </div>
         </div>
 
         <div id="permission-box" class="permission" hidden>
@@ -374,10 +380,22 @@
           <button id="btn-wx-import" type="button">导入朋友圈数据</button>
           <button id="btn-wx-toggle" type="button" disabled>启用朋友圈</button>
           <button id="btn-wx-interactions" type="button" disabled>关闭朋友圈互动</button>
-          <button id="btn-wx-clear" class="danger" type="button" disabled>清空朋友圈数据</button>
+          <button id="btn-wx-clear" class="danger" type="button" disabled>删除朋友圈原始数据</button>
           <span class="panel-note" id="wx-message"></span>
         </div>
         <p class="note" id="wx-note" hidden></p>
+      </section>
+
+      <section class="panel" aria-labelledby="trash-title">
+        <div class="panel-head">
+          <h2 id="trash-title">回收站</h2>
+          <span class="panel-note" id="trash-state">空</span>
+        </div>
+        <p class="hint">
+          清空知识库、删除朋友圈原始数据之前，文件会先搬到这里，<strong>不会直接消失</strong>。
+          后悔了可以从这里恢复；确认不要了，自己删数据目录下的 trash 文件夹即可。
+        </p>
+        <div id="trash-list"></div>
       </section>
 
       <section class="panel" aria-labelledby="profile-title">
@@ -393,6 +411,10 @@
           <button id="btn-profile" type="button" disabled>生成人物画像</button>
           <span class="panel-note" id="profile-state"></span>
         </div>
+        <p class="hint" id="profile-dataflow-note">
+          点这个按钮会把<strong>全量记录</strong>交给宿主模型做润色——这一步数据会离开本机进程。
+          检索、统计、事实校验都在本地跑，不调模型；不点就不会外发。
+        </p>
         <div class="profile" id="profile-box" hidden>
           <pre id="profile-text"></pre>
         </div>
@@ -422,6 +444,10 @@
           <input id="chat-input" type="text" autocomplete="off" placeholder="问我关于你过去的事，比如：2015 年你在忙什么？" />
           <button class="primary" type="submit">发送</button>
         </form>
+        <p class="hint" id="chat-dataflow-note">
+          发送后，<strong>本轮用到的知识库内容</strong>（命中块、年度摘要、画像）会作为 prompt 交给宿主模型——
+          这一步数据会离开本机进程。宿主服务端是否留存由宿主服务决定。
+        </p>
       </section>
     </div>
 
@@ -474,6 +500,10 @@
           btnWxToggle: document.getElementById('btn-wx-toggle'),
           btnWxInteractions: document.getElementById('btn-wx-interactions'),
           btnWxClear: document.getElementById('btn-wx-clear'),
+          btnResetKb: document.getElementById('btn-reset-kb'),
+          btnCloseSession: document.getElementById('btn-close-session'),
+          trashList: document.getElementById('trash-list'),
+          trashState: document.getElementById('trash-state'),
         };
 
         var PHASE_TEXT = {
@@ -520,8 +550,8 @@
 
           if (session.browserAlive && session.loginReady) {
             tone = 'ready';
-            text = '登录会话保持中：全程只需要扫码一次，回溯已删除说说也不用再扫。';
-            hint = '请不要关掉那个 QQ 空间浏览器窗口，关掉后登录态会失效。';
+            text = '浏览器仍在运行，登录态仍存在：全程只需要扫码一次，回溯已删除说说也不用再扫。';
+            hint = '请不要关掉那个 QQ 空间浏览器窗口，关掉后登录态会失效。不再需要时可以点「关闭登录会话并清除登录态」。';
           } else if (session.browserAlive) {
             tone = 'waiting';
             text = session.state === 'exporting'
@@ -542,6 +572,8 @@
           el.sessionBox.setAttribute('data-state', tone);
           el.sessionText.textContent = text;
           el.sessionHint.textContent = hint;
+          // 浏览器还开着才给「关闭会话」——不然这个按钮永远是个摆设。
+          el.btnCloseSession.hidden = !session.browserAlive;
         }
 
         /**
@@ -584,6 +616,57 @@
           }
         }
 
+        /**
+         * 回收站（3.0.1）。
+         *
+         * 破坏性操作先搬到这里，所以「清空知识库」「删除朋友圈原始数据」
+         * 都不是不可逆的——用户后悔了能一键恢复，不用重新导出重新建库。
+         */
+        function renderTrash(items) {
+          var list = el.trashList;
+          list.innerHTML = '';
+          if (!items || !items.length) {
+            el.trashState.textContent = '空';
+            return;
+          }
+          el.trashState.textContent = items.length + ' 条';
+          items.slice(0, 10).forEach(function (item) {
+            var row = document.createElement('div');
+            row.className = 'row';
+            row.style.marginTop = '8px';
+
+            var label = document.createElement('span');
+            label.className = 'panel-note';
+            var when = item.at ? new Date(item.at).toLocaleString() : '';
+            var what = item.scope === 'kb'
+              ? '知识库'
+              : (item.scope === 'wx' ? '朋友圈原始数据' : item.scope);
+            label.textContent = when + ' · ' + what + ' · ' + (item.files || []).length + ' 个文件';
+
+            var btn = document.createElement('button');
+            btn.type = 'button';
+            btn.textContent = '恢复';
+            btn.addEventListener('click', function () {
+              if (!window.confirm('恢复会覆盖当前的同名文件，要继续吗？')) return;
+              post('/api/trash/restore', { id: item.id, confirm: true }).then(function (result) {
+                el.trashState.textContent = (result && result.message) || '恢复失败';
+                poll();
+                loadTrash();
+              });
+            });
+
+            row.appendChild(label);
+            row.appendChild(btn);
+            list.appendChild(row);
+          });
+        }
+
+        function loadTrash() {
+          api('/api/trash').then(function (data) {
+            renderTrash((data && data.items) || []);
+          }).catch(function () {});
+        }
+
         function renderState(state) {
           latestState = state;
           /**
@@ -611,6 +694,8 @@
 
           el.btnExport.disabled = Boolean(state.exporting);
           el.btnStop.hidden = !state.exporting;
+          // 只有真有知识库的时候才给「清空」按钮——不给用户点一个没意义的破坏动作。
+          el.btnResetKb.hidden = !state.kbReady;
           // 只有朋友圈数据时也要能建库——不然这个功能就成了摆设。
           var hasWx = Boolean(state.wx && state.wx.imported);
           el.btnBuild.disabled = Boolean(state.exporting) || state.phase === 'building'
@@ -836,11 +921,84 @@
           });
         });
 
+        /**
+         * 删除朋友圈原始数据（3.0.1）。
+         *
+         * 这份 JSON 是外部解密工具导出来的，删了要重新导——
+         * 所以先摆出影响范围让用户确认，删之前还会先进回收站。
+         */
         el.btnWxClear.addEventListener('click', function () {
-          post('/api/wx/clear', {}).then(function (result) {
-            el.wxMessage.textContent = result && result.ok
-              ? '已清空，点「重新构建知识库」生效'
-              : '清空失败';
+          api('/api/impact').then(function (data) {
+            var wx = (data && data.wx) || {};
+            var lines = [
+              '将删除朋友圈原始数据：',
+              '· 动态 ' + (wx.count || 0) + ' 条',
+              '· 文件约 ' + Math.round((wx.bytes || 0) / 1024) + ' KB',
+              '',
+              '删了要用解密工具重新导出。文件会先移到回收站，可以恢复。',
+              '要继续吗？',
+            ].join('\n');
+            if (!window.confirm(lines)) return;
+            post('/api/wx/clear', { confirm: true }).then(function (result) {
+              el.wxMessage.textContent = (result && result.ok)
+                ? ((result.message || '已删除') + '（已移入回收站，可恢复）')
+                : ((result && result.message) || '删除失败');
+              poll();
+              loadTrash();
+            });
+          });
+        });
+
+        /**
+         * 清空知识库（3.0.1）。
+         *
+         * 原来只有后端接口、页面上没有入口；现在给了入口，
+         * 就必须把「删什么、影响多大」先摆出来，并且留回收站兜底。
+         */
+        el.btnResetKb.addEventListener('click', function () {
+          api('/api/impact').then(function (data) {
+            var kb = (data && data.kb) || {};
+            var lines = [
+              '将清空知识库：',
+              '· 记录 ' + (kb.totalRecords || 0) + ' 条',
+              '· 知识块 ' + (kb.chunkCount || 0) + ' 个',
+              kb.yearFrom ? '· 年份 ' + kb.yearFrom + '–' + kb.yearTo : '',
+              '· 文件 ' + (kb.files || []).length + ' 个',
+              '',
+              '知识库会清空，原始导出数据不动，可以重新建库。',
+              '文件会先移到回收站，可以恢复。',
+              '要继续吗？',
+            ].filter(function (line) { return line !== ''; }).join('\n');
+            if (!window.confirm(lines)) return;
+            post('/api/reset', { confirm: true }).then(function (result) {
+              el.status.textContent = (result && result.ok)
+                ? ((result.message || '已清空知识库') + '（已移入回收站，可恢复）')
+                : ((result && result.message) || '清空失败');
+              poll();
+              loadTrash();
+            });
+          });
+        });
+
+        /**
+         * 关闭导出会话（3.0.1）。
+         *
+         * 常驻浏览器是 detached 的，用户很容易忘了它还开着、登录态还在。
+         * 这个按钮给一个明确的收口：关窗口 + 删掉本机登录 profile。
+         */
+        el.btnCloseSession.addEventListener('click', function () {
+          var lines = [
+            '将关闭 QQ 空间登录会话：',
+            '· 关掉那个浏览器窗口',
+            '· 删除本机的登录 profile（登录态立即失效）',
+            '',
+            '下次导出要重新扫码。要继续吗？',
+          ].join('\n');
+          if (!window.confirm(lines)) return;
+          post('/api/export/close-session', { confirm: true }).then(function (result) {
+            el.sessionHint.textContent = (result && result.ok)
+              ? (result.message || '会话已关闭')
+              : ((result && result.message) || '关闭失败');
             poll();
           });
         });
@@ -939,6 +1097,7 @@
         }
 
         poll();
+        loadTrash();
       })();
     </script>
   </body>

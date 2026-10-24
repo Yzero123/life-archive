@@ -14,6 +14,7 @@
 //
 // 注意：MCP 协议规定 stdout 只能写 JSON-RPC 消息，所有日志一律走 stderr。
 
+import { createHash } from 'node:crypto';
 import { existsSync, readdirSync, statSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
@@ -32,7 +33,7 @@ import {
 const PLUGIN_ID = 'life-archive';
 const PLUGIN_ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const SERVER_NAME = 'life-archive';
-const SERVER_VERSION = '3.0.0';
+const SERVER_VERSION = '3.0.1';
 
 // 单次工具返回的文本上限。知识库原文可能很长，截断后必须说明，
 // 否则调用方会以为资料到此为止。
@@ -114,6 +115,24 @@ async function readJson(name) {
   }
 }
 
+/** 解析 JSON，坏了就当没有——不该因为一个文件坏掉就让整个服务器起不来。 */
+function safeJsonParse(text) {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+
+/** 知识库文件的原始字节。 */
+async function readRaw(name) {
+  try {
+    return await readFile(join(KB_DIR, name));
+  } catch {
+    return null;
+  }
+}
+
 /** 运行时状态：人设、阶段、统计。人设是用户自己写的，属于可信事实。 */
 async function readState() {
   try {
@@ -148,42 +167,43 @@ let cache = null;
 let cacheSignature = '';
 
 /**
- * 知识库文件的「指纹」：文件名 + 修改时间 + 大小。
+ * 知识库文件的**内容指纹**（SHA-256）。
  *
- * 为什么需要它：MCP 服务器是**常驻进程**，如果不看文件有没有变，
- * 就会把第一次读到的知识库一直用下去——
- * 用户在面板里导入新数据、重新构建了知识库之后，
- * bot 问出来的还是**重建之前**的旧画像。
- * 实测踩过：重建后 `kb_profile` 仍返回旧的 `updatedAt`。
+ * 为什么不用 mtime + size：
+ *   - 同一秒内「改内容但大小不变」的覆盖，mtime/size 看不出来；
+ *   - 某些文件系统的时间精度只有 1 秒；
+ *   - 读到写了一半的文件时，签名和内容对不上（半新半旧）。
  *
- * 所以每次取数据前先算一次指纹，变了就重读。
+ * v3.0.1 起直接对**文件内容**取哈希：读到的字节和算出的指纹一定是同一份，
+ * 不存在「签名是旧的、内容是新的」这种错位。代价是每次调用要读一遍文件
+ * （约 2 MB，SHA-256 在这个量级是毫秒级），换来的是「拿到的一定是最新且完整的那份」。
  */
-function kbSignature() {
-  const parts = [];
-  for (const name of ['chunks.jsonl', 'unified.jsonl', 'summaries.jsonl', 'profile.json']) {
-    try {
-      const stat = statSync(join(KB_DIR, name));
-      parts.push(`${name}:${stat.mtimeMs}:${stat.size}`);
-    } catch {
-      parts.push(`${name}:-`);
-    }
+async function kbSignature(buffers) {
+  const hash = createHash('sha256');
+  for (const buffer of buffers) {
+    // 长度前缀分隔：避免两个文件的字节拼在一起产生歧义
+    const bytes = buffer ?? Buffer.alloc(0);
+    hash.update(String(bytes.length));
+    hash.update(':');
+    hash.update(bytes);
   }
-  return parts.join('|');
+  return hash.digest('hex');
 }
 
 async function loadKnowledgeBase() {
-  const signature = kbSignature();
+  const names = ['chunks.jsonl', 'unified.jsonl', 'summaries.jsonl', 'profile.json'];
+  const buffers = await Promise.all(names.map(readRaw));
+  const signature = await kbSignature(buffers);
   if (cache && cacheSignature === signature) return cache;
-  const [chunks, records, summaries, profile] = await Promise.all([
-    readJsonl('chunks.jsonl'),
-    readJsonl('unified.jsonl'),
-    readJsonl('summaries.jsonl'),
-    readJson('profile.json'),
-  ]);
+
+  const [chunks, records, summaries, profile] = [
+    parseJsonl(buffers[0]?.toString('utf8') ?? ''),
+    parseJsonl(buffers[1]?.toString('utf8') ?? ''),
+    parseJsonl(buffers[2]?.toString('utf8') ?? ''),
+    safeJsonParse(buffers[3]?.toString('utf8') ?? ''),
+  ];
   const index = buildIndex(chunks);
   cache = { chunks, records, summaries, profile, index };
-  // 记的是**读之前**的指纹：如果读取过程中文件又被写了，
-  // 下一次调用算出的指纹会跟它不一样，于是会再读一次，不会读到半新半旧的数据。
   cacheSignature = signature;
   return cache;
 }

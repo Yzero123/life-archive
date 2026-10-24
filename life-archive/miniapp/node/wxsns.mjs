@@ -23,6 +23,15 @@
 
 import { emptyRecord, TIME_SOURCE, WX_ID_PREFIX } from './kb.mjs';
 
+import {
+  MAX_COMMENTS,
+  MAX_CONTENT_CHARS,
+  MAX_LIKE_USERS,
+  MAX_MEDIA,
+  MAX_RECORDS,
+  capText,
+} from './limits.mjs';
+
 export { WX_ID_PREFIX };
 export const WX_SOURCE = 'wechat-sns';
 export const WX_KIND = 'moments';
@@ -364,9 +373,16 @@ export function parseWechatSns(payload, { ownerWxid = '', includeInteractions = 
     likes: 0,
     owner: owner,
     ownerResolved: Boolean(owner),
+    // 3.0.1：撞到记录数上限时如实标出来，不假装「全都导进来了」。
+    truncated: false,
   };
 
   for (const post of posts) {
+    // 3.0.1：总量上限。不让一份畸形导出把内存吃光。
+    if (records.length >= MAX_RECORDS) {
+      stats.truncated = true;
+      break;
+    }
     // 作者为空时保守跳过——无法确认归属就不入库。
     if (!post.author) {
       stats.notMine += 1;
@@ -386,7 +402,7 @@ export function parseWechatSns(payload, { ownerWxid = '', includeInteractions = 
       : [];
     for (let index = 0; index < myComments.length; index += 1) {
       const mine = myComments[index];
-      const voice = text(mine.content);
+      const voice = capText(text(mine.content), MAX_CONTENT_CHARS);
       if (!voice) continue;
       const record = emptyRecord();
       record.id = `${WX_COMMENT_ID_PREFIX}${post.id}-${index}`;
@@ -455,20 +471,25 @@ export function parseWechatSns(payload, { ownerWxid = '', includeInteractions = 
       // 自己说过的话另有「留言」记录承载，这里只留**别人**对我的评论。
       record.comments = post.comments
         .filter((c) => !c.uin || stripDeviceSuffix(c.uin) !== owner)
-        .map((c) => ({ nick: c.nick, content: c.content }));
+        .map((c) => ({ nick: c.nick, content: c.content }))
+        .slice(0, MAX_COMMENTS);
       record.like_users = post.likes
         .filter((l) => !l.uin || stripDeviceSuffix(l.uin) !== owner)
-        .map((l) => ({ uin: l.uin, nick: l.nick }));
+        .map((l) => ({ uin: l.uin, nick: l.nick }))
+        .slice(0, MAX_LIKE_USERS);
 
       record.images = post.media
         .filter((m) => !m.isVideo)
-        .map((m) => ({ url: m.url, thumb: m.thumb, md5: m.md5 }));
+        .map((m) => ({ url: m.url, thumb: m.thumb, md5: m.md5 }))
+        .slice(0, MAX_MEDIA);
       record.videos = post.media
         .filter((m) => m.isVideo)
-        .map((m) => ({ url: m.url, thumb: m.thumb, duration: m.duration }));
+        .map((m) => ({ url: m.url, thumb: m.thumb, duration: m.duration }))
+        .slice(0, MAX_MEDIA);
 
       const composed = composeWxContent(post);
-      record.content = composed || factualFallback(post);
+      // 3.0.1：单条正文有硬上限，超了显式标注截断。
+      record.content = capText(composed || factualFallback(post), MAX_CONTENT_CHARS);
       record.user_voice = record.content;
       if (!record.content) {
         stats.empty += 1;

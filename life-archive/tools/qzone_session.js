@@ -189,6 +189,13 @@ async function start(args) {
   }
 
   fs.mkdirSync(args.profileDir, { recursive: true });
+  // profile 里存着 QQ 空间登录态（cookie / Local Storage），只给当前用户读写。
+  // 目录默认是 umask 决定的 755，同机其他账号能进来翻——这里收紧到 700。
+  try {
+    fs.chmodSync(args.profileDir, 0o700);
+  } catch {
+    // Windows 上没有 POSIX 权限位，忽略。
+  }
   const bin = chromePath();
   if (!fs.existsSync(bin)) {
     console.error(JSON.stringify({ ok: false, error: '找不到系统 Chrome：%s' % bin }));

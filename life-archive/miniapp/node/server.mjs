@@ -6,7 +6,7 @@
 //   3. 合并两路数据源、切知识块、建检索索引
 //   4. 对话：先检索，检索不到直接回固定话术；检索到才让 Agent 基于资料作答，并做接地校验
 
-import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { homedir, tmpdir } from 'node:os';
@@ -16,6 +16,13 @@ import {
   PHASE,
   Store,
 } from './store.mjs';
+
+import {
+  MAX_BODY_BYTES,
+  MAX_FILE_BYTES,
+  MAX_PROFILE_CHARS,
+  jsonDepthError,
+} from './limits.mjs';
 
 import {
   buildChunks,
@@ -435,7 +442,8 @@ async function handle(request, response, runtime) {
     return json(response, await savePersona(runtime, body));
   }
   if (request.method === 'POST' && path === '/api/reset') {
-    return json(response, await reset(runtime));
+    const body = await readBody(request);
+    return json(response, await reset(runtime, body));
   }
   // 2.0：微信朋友圈。默认关，关着的时候 1.0 的行为一个字都不变。
   if (request.method === 'GET' && path === '/api/wx/status') {
@@ -454,7 +462,24 @@ async function handle(request, response, runtime) {
     return json(response, await switchWxInteractions(runtime, body));
   }
   if (request.method === 'POST' && path === '/api/wx/clear') {
-    return json(response, await clearWx(runtime));
+    const body = await readBody(request);
+    return json(response, await clearWx(runtime, body));
+  }
+
+  // 3.0.1：破坏性操作的影响范围、回收站、导出会话清理。
+  if (request.method === 'GET' && path === '/api/impact') {
+    return json(response, await impact(runtime));
+  }
+  if (request.method === 'GET' && path === '/api/trash') {
+    return json(response, { ok: true, items: await runtime.store.listTrash() });
+  }
+  if (request.method === 'POST' && path === '/api/trash/restore') {
+    const body = await readBody(request);
+    return json(response, await restoreTrash(runtime, body));
+  }
+  if (request.method === 'POST' && path === '/api/export/close-session') {
+    const body = await readBody(request);
+    return json(response, await closeExportSession(runtime, body));
   }
 
   response.writeHead(404, { 'content-type': 'application/json; charset=utf-8' });
@@ -476,7 +501,7 @@ function readBody(request) {
     let size = 0;
     request.on('data', (chunk) => {
       size += chunk.length;
-      if (size > 4 * 1024 * 1024) {
+      if (size > MAX_BODY_BYTES) {
         reject(new Error('请求体过大'));
         request.destroy();
         return;
@@ -487,6 +512,13 @@ function readBody(request) {
       const raw = Buffer.concat(chunks).toString('utf8');
       if (!raw) {
         resolve({});
+        return;
+      }
+      // 3.0.1：JSON 嵌套深度上限。Node 的 JSON.parse 没有深度限制，
+      // 几百层嵌套的数组能把解析栈打爆——在进解析器之前就挡住。
+      const depthError = jsonDepthError(raw);
+      if (depthError) {
+        reject(new Error(depthError));
         return;
       }
       try {
@@ -521,6 +553,31 @@ function isPidAlive(pid) {
  * 用户最怕的就是「又要重扫一次」，页面必须把「浏览器还开着、登录态还在」
  * 这件事明确说出来——只要浏览器还活着，下一次扫码就是在这个窗口里补扫一次。
  */
+/**
+ * 导出会话状态 → **给页面看的最小视图**。
+ *
+ * v3.0.1 修：原来把整个会话对象原样发给页面，里面有完整 QQ 号、
+ * 常驻浏览器 PID、CDP 调试端点、工作目录绝对路径、日志文件路径——
+ * 页面一个都用不上（它只关心「浏览器活着吗 / 登录好了吗 / 出什么错了」）。
+ *
+ * 多给的字段有两个害处：
+ *   1. 它们会进页面 DOM，也就可能进任何页面级的日志或截图；
+ *   2. 页面状态是宿主能直接读到的接口，等于多开了一个暴露面。
+ *
+ * 内部逻辑（判断「后台抓取还在跑」）仍然用完整对象，那部分不外发。
+ */
+function publicExportSession(session) {
+  if (!session) return null;
+  return {
+    state: session.state,
+    message: session.message,
+    error: session.error,
+    browserAlive: session.browserAlive,
+    loginReady: session.loginReady,
+    updatedAt: session.updatedAt,
+  };
+}
+
 async function readExportSession(dataDir) {
   const statusPath = join(dataDir, 'export', 'export-status.json');
   let status = null;
@@ -624,7 +681,8 @@ async function snapshot(runtime) {
       : null,
     exporting: Boolean(runtime.exportController),
     // 导出流水线（常驻浏览器 / 登录态）状态，页面用来显示「只扫一次」
-    exportSession,
+    // 只给页面用得到的字段：QQ 号 / PID / CDP 端点 / 绝对路径 / 日志路径都不过去。
+    exportSession: publicExportSession(exportSession),
     fallbackAnswer: FALLBACK_ANSWER,
   };
 }
@@ -942,23 +1000,146 @@ async function savePersona(runtime, body) {
   return { ok: true, persona };
 }
 
-async function reset(runtime) {
+/**
+ * 知识库当前有什么——删之前得让用户看见。
+ *
+ * 只给「范围与条数」，不给内容：影响范围面板是给人看的，
+ * 不该顺手把记录原文又摊开一次。
+ */
+async function kbImpact(store) {
+  const stats = store.state.stats ?? {};
+  const files = [];
+  for (const [name, path] of [
+    ['unified.jsonl', store.unifiedPath],
+    ['chunks.jsonl', store.chunksPath],
+    ['summaries.jsonl', store.summariesPath],
+    ['profile.json', store.profilePath],
+  ]) {
+    try {
+      const info = await stat(path);
+      files.push({ name, bytes: info.size });
+    } catch {
+      // 文件不存在就不列。
+    }
+  }
+  return {
+    totalRecords: Number(stats.totalRecords ?? 0),
+    chunkCount: Number(stats.chunkCount ?? 0),
+    summaryCount: Number(stats.summaryCount ?? 0),
+    yearFrom: String(stats.yearFrom ?? ''),
+    yearTo: String(stats.yearTo ?? ''),
+    files,
+  };
+}
+
+/** 朋友圈原始数据当前有什么。 */
+async function wxImpact(store) {
+  const wx = store.state.wx ?? {};
+  let bytes = 0;
+  try {
+    bytes = (await stat(store.wxSnsPath)).size;
+  } catch {
+    bytes = 0;
+  }
+  return {
+    imported: Boolean(wx.imported),
+    enabled: Boolean(wx.enabled),
+    count: Number(wx.count ?? 0),
+    bytes,
+    source: String(wx.source ?? ''),
+  };
+}
+
+/** 一次拿全两种破坏性操作的影响范围。 */
+async function impact(runtime) {
+  return {
+    ok: true,
+    kb: await kbImpact(runtime.store),
+    wx: await wxImpact(runtime.store),
+  };
+}
+
+/**
+ * 清空知识库。
+ *
+ * 3.0.1 修：原来这个接口直接把知识库文件 rm 掉——**没有确认、没有备份**。
+ * 手滑一次或者被误调用，说说就没了。现在三道保险：
+ *   1. 必须显式 confirm，调用方（页面）先把影响范围摆给用户看；
+ *   2. 先把文件搬进本地回收站，再删；
+ *   3. 返回回收站条目编号，用户后悔了能一键恢复。
+ */
+async function reset(runtime, body = {}) {
   const { store } = runtime;
+  if (body?.confirm !== true) {
+    return {
+      ok: false,
+      error: 'confirmation_required',
+      message: '清空知识库需要确认：先看影响范围，再带 confirm 重新调用。',
+      scope: await kbImpact(store),
+    };
+  }
+  const stash = await store.stashKb();
   await store.clearKb();
   await store.saveState({ phase: PHASE.IDLE, message: '已清空知识库', stats: {}, progress: [] });
   runtime.index = null;
+  runtime.profile = null;
   runtime.chatContext = [];
   runtime.chatJobs.clear();
-  return { ok: true };
+  return {
+    ok: true,
+    message: '已清空知识库',
+    backup: stash
+      ? {
+        id: stash.id,
+        scope: stash.scope,
+        files: stash.files.length,
+        bytes: stash.files.reduce((sum, file) => sum + file.bytes, 0),
+      }
+      : null,
+  };
+}
+
+/**
+ * 从本地回收站恢复。
+ *
+ * 恢复会覆盖当前同名文件，所以同样要 confirm。
+ */
+async function restoreTrash(runtime, body = {}) {
+  const { store } = runtime;
+  if (body?.confirm !== true) {
+    return {
+      ok: false,
+      error: 'confirmation_required',
+      message: '恢复会覆盖当前同名文件，需要确认。',
+      items: await store.listTrash(),
+    };
+  }
+  const result = await store.restoreTrash(body?.id);
+  if (!result.ok) return result;
+
+  if (result.scope === 'kb') {
+    // 索引和画像都从磁盘重建，不然页面还拿着「空知识库」的状态。
+    runtime.index = null;
+    runtime.profile = null;
+    runtime.chatContext = [];
+    runtime.chatJobs.clear();
+    await store.loadState();
+  }
+  if (result.scope === 'wx') {
+    await store.saveState({
+      wx: { enabled: false, imported: false, count: 0, owner: '', source: '', importedAt: 0 },
+    });
+  }
+  return { ...result, message: '已从回收站恢复' };
 }
 
 // ---------------------------------------------------------------------------
 // 微信朋友圈（2.0）
 // ---------------------------------------------------------------------------
 /**
- * 内容嗅探的大小上限。朋友圈正文体量小，超大文件多半不是我们要的。
+ * 内容嗅探的大小上限挪到了 limits.mjs（MAX_FILE_BYTES）。
+ * 朋友圈正文体量小，超大文件多半不是我们要的。
  */
-const WX_SNIFF_MAX_BYTES = 32 * 1024 * 1024;
 
 /**
  * 判断一个文件是不是「朋友圈导出」。
@@ -970,8 +1151,11 @@ const WX_SNIFF_MAX_BYTES = 32 * 1024 * 1024;
 async function looksLikeWechatSnsFile(path) {
   try {
     const info = await stat(path);
-    if (!info.isFile() || info.size > WX_SNIFF_MAX_BYTES) return false;
-    const payload = JSON.parse(await readFile(path, 'utf8'));
+    if (!info.isFile() || info.size > MAX_FILE_BYTES) return false;
+    const raw = await readFile(path, 'utf8');
+    // 3.0.1：嵌套太深的文件先挡在解析器外面。
+    if (jsonDepthError(raw)) return false;
+    const payload = JSON.parse(raw);
     return Boolean(payload && typeof payload === 'object' && Array.isArray(payload.posts));
   } catch {
     return false;
@@ -1113,6 +1297,9 @@ export async function importWx(runtime, body, options = {}) {
   let payload = null;
   let sourcePath = '';
   let zipHint = 0;
+  // 3.0.1：嵌套太深 / 不是合法 JSON 的文件，记下来，最后一起如实报。
+  // 静默跳过会让用户以为「这个目录里没有数据」，其实是文件有问题。
+  let depthIssue = '';
 
   const inline = body?.payload;
   if (inline && typeof inline === 'object') {
@@ -1139,7 +1326,13 @@ export async function importWx(runtime, body, options = {}) {
     for (const candidate of candidates) {
       let parsed = null;
       try {
-        parsed = JSON.parse(await readFile(candidate, 'utf8'));
+        const raw = await readFile(candidate, 'utf8');
+        const depthError = jsonDepthError(raw);
+        if (depthError) {
+          depthIssue = depthIssue || `${basename(candidate)}：${depthError}`;
+          continue;
+        }
+        parsed = JSON.parse(raw);
       } catch {
         // 读不到或不是合法 JSON，换下一个候选
         continue;
@@ -1190,9 +1383,12 @@ export async function importWx(runtime, body, options = {}) {
     const zipNote = zipHint
       ? `另外发现 ${zipHint} 个 zip 压缩包——请先解压，取出里面的 JSON 再导入。`
       : '';
+    const depthNote = depthIssue
+      ? `（${depthIssue}——这个文件不是正常导出的数据，已跳过。）`
+      : '';
     return {
       ok: false,
-      message: '没找到可导入的朋友圈数据。把导出的 JSON 放进下面的目录，或直接填文件路径。' + zipNote,
+      message: '没找到可导入的朋友圈数据。把导出的 JSON 放进下面的目录，或直接填文件路径。' + zipNote + depthNote,
       targetDir: store.rawDir,
     };
   }
@@ -1302,8 +1498,23 @@ async function switchWx(runtime, body) {
   return { ok: true, enabled, needRebuild: true };
 }
 
-async function clearWx(runtime) {
+/**
+ * 清空朋友圈原始数据。
+ *
+ * 3.0.1 修：原来直接 rm 掉那份 JSON——那是外部解密工具导出的原始数据，
+ * 删了要重新导。现在同样两道保险：显式 confirm + 先搬进本地回收站。
+ */
+async function clearWx(runtime, body = {}) {
   const { store } = runtime;
+  if (body?.confirm !== true) {
+    return {
+      ok: false,
+      error: 'confirmation_required',
+      message: '删除朋友圈原始数据需要确认：先看影响范围，再带 confirm 重新调用。',
+      scope: await wxImpact(store),
+    };
+  }
+  const stash = await store.stashWxSns();
   await store.removeWxSns();
   await store.saveState({
     wx: { enabled: false, imported: false, count: 0, owner: '', source: '', importedAt: 0 },
@@ -1311,7 +1522,90 @@ async function clearWx(runtime) {
   runtime.index = null;
   runtime.chatContext = [];
   runtime.chatJobs.clear();
-  return { ok: true, needRebuild: true };
+  return {
+    ok: true,
+    needRebuild: true,
+    message: '已清空朋友圈数据',
+    backup: stash
+      ? {
+        id: stash.id,
+        scope: stash.scope,
+        files: stash.files.length,
+        bytes: stash.files.reduce((sum, file) => sum + file.bytes, 0),
+      }
+      : null,
+  };
+}
+
+/**
+ * 关闭导出会话：关掉常驻浏览器、删掉它的登录 profile。
+ *
+ * 审查建议里的一条：常驻浏览器是 detached 的，用户容易忘了它还开着，
+ * 登录态比预期活得久。这里给一个明确的收口入口——
+ * 不想再留着登录态的时候，一键关掉并把 profile 删干净。
+ */
+async function closeExportSession(runtime, body = {}) {
+  const { store } = runtime;
+  if (runtime.exportController) {
+    return { ok: false, message: '导出正在进行中，先停止导出再关闭会话。' };
+  }
+  if (body?.confirm !== true) {
+    const session = await readExportSession(store.dataDir);
+    return {
+      ok: false,
+      error: 'confirmation_required',
+      message: '关闭会话会关掉浏览器并删除本地登录态，需要确认。',
+      scope: {
+        browserAlive: Boolean(session?.browserAlive),
+        loginReady: Boolean(session?.loginReady),
+        state: String(session?.state ?? ''),
+      },
+    };
+  }
+
+  const session = await readExportSession(store.dataDir);
+  let browserClosed = false;
+  if (session?.browserPid && isPidAlive(session.browserPid)) {
+    try {
+      process.kill(Number(session.browserPid), 'SIGTERM');
+      browserClosed = true;
+    } catch {
+      // 进程可能刚好自己退了，忽略。
+    }
+  }
+
+  // profile 目录在临时工作区里，是常驻浏览器的登录态所在。
+  // 工作目录可以被用户改过，所以优先用状态文件里记的那个。
+  const workDir = String(session?.workDir || join(tmpdir(), 'qq-space-export-work'));
+  const profileDir = join(workDir, 'resource', 'temp', 'chrome-profile-session');
+  let profileRemoved = false;
+  try {
+    await rm(profileDir, { recursive: true, force: true });
+    profileRemoved = true;
+  } catch {
+    // 目录本来就不在（用的是别的临时目录），不算失败。
+  }
+
+  // 状态文件标记成「会话已关闭」，页面别再显示「登录会话保持中」。
+  try {
+    const statusPath = join(store.dataDir, 'export', 'export-status.json');
+    const status = JSON.parse(await readFile(statusPath, 'utf8'));
+    await writeFile(
+      statusPath,
+      `${JSON.stringify({ ...status, state: 'closed', browserPid: 0, loginReady: false, message: '会话已关闭，登录态已清除' }, null, 2)}\n`,
+      'utf8',
+    );
+  } catch {
+    // 状态文件本来就不在。
+  }
+
+  await store.saveState({ message: '导出会话已关闭，浏览器已关掉、登录态已清除' });
+  return {
+    ok: true,
+    browserClosed,
+    profileRemoved,
+    message: '已关闭导出会话：浏览器已关掉，本地登录 profile 已删除。',
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -1321,22 +1615,43 @@ async function clearWx(runtime) {
 const PROFILE_SYSTEM = `你在为一个人整理人物档案，材料是他自己的社交动态记录。
 只写材料里能读出来的东西，不做心理学发挥，不加"可能""也许"这类猜测。`;
 
-/** 把全量说说按时间铺开，作为画像素材。 */
+/**
+ * 把全量说说按时间铺开，作为画像素材。
+ *
+ * 3.0.1：素材有硬上限。超了就把**更晚**的说说留在外面，并明确告诉模型
+ * 「还有 N 条没放进素材」——不然模型会以为自己看完了全部，
+ * 然后凭空补一段「近两年在做什么」。
+ */
 function profileMaterial(records) {
-  return records
+  const sorted = records
     .filter((r) => r.kind !== 'guestbook' && (r.content ?? '').trim())
-    .sort((a, b) => (a.published_at || 0) - (b.published_at || 0))
-    .map((record) => {
-      const time = record.published_at
-        ? new Date(record.published_at * 1000).toISOString().slice(0, 10)
-        : '时间未知';
-      const where = record.location ? `｜${record.location}` : '';
-      const social = record.like_count
-        ? `｜${record.like_count}赞/${(record.comments ?? []).length}评论`
-        : '';
-      return `${time}${where}${social} ${record.content}`;
-    })
-    .join('\n');
+    .sort((a, b) => (a.published_at || 0) - (b.published_at || 0));
+  const lines = [];
+  let used = 0;
+  let dropped = 0;
+  for (const record of sorted) {
+    const time = record.published_at
+      ? new Date(record.published_at * 1000).toISOString().slice(0, 10)
+      : '时间未知';
+    const where = record.location ? `｜${record.location}` : '';
+    const social = record.like_count
+      ? `｜${record.like_count}赞/${(record.comments ?? []).length}评论`
+      : '';
+    const line = `${time}${where}${social} ${record.content}`;
+    if (lines.length > 0 && used + line.length > MAX_PROFILE_CHARS) {
+      dropped += 1;
+      continue;
+    }
+    lines.push(line);
+    used += line.length + 1;
+  }
+  if (dropped > 0) {
+    lines.push(
+      `（素材按 ${MAX_PROFILE_CHARS} 字上限截断：这里有 ${lines.length} 条，另有 ${dropped} 条更晚的说说没有放进素材；`
+      + '统计底座仍然覆盖全库，缺的部分不要自己补。）',
+    );
+  }
+  return lines.join('\n');
 }
 
 function profilePrompt(records, baseline) {
